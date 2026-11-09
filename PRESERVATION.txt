@@ -1,0 +1,20 @@
+TICKET GO TEKNOLOJİ AŞ. — koruma notu
+Tarih: 2026-11-09
+
+Bu çalışma alanı (ticketgoteknoloji sistem analiz) incelendi.
+
+- AGENTS.md yoktu.
+- Git deposu yoktu. Hard reset ve force push uygulanmadı.
+- Bu klasörde Tauri kaynağı, tauri.conf.json, package.json veya src-tauri yoktu.
+- Önceki oturumda Tauri izleme uygulaması dosyaya yazılmadan kesilmişti. Silinecek Tauri izleme kaynağı bulunmadığı için hiçbir Tauri dosyası silinmedi.
+- Makinede bulunan tek Tauri yapılandırması ilgisiz projedir:
+  /Users/ticket-go/LocalProjects/go muhasebe tauri
+  productName: Go Muhasebe
+  identifier: com.gomuhasebe.app
+  Bu projeye ait süreç yoktu. Kaynaklarına dokunulmadı, süreç kapatılmadı.
+- Bu izleme çalışmasına ait çalışan Tauri, Vite veya cargo süreci yoktu.
+- Cursor eklenti sunucusu ve agent worker süreçleri kapatılmadı.
+- Ticket-Go Backend ve Go-Chat kaynakları değiştirilmedi.
+- Production servisleri durdurulmadı veya yeniden başlatılmadı.
+
+Qt uygulaması ayrı dizindedir: ticket-go-izleme-qt

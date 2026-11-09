@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ticketgoteknoloji.com/schemas/monitoring-contract-1.0.json",
+  "title": "Ticket Go monitoring contract 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "service", "environment", "status", "timestamp"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "service": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "environment": { "enum": ["production", "staging", "development"] },
+    "status": { "enum": ["healthy", "degraded", "unhealthy", "unknown"] },
+    "timestamp": { "type": "string", "minLength": 10, "maxLength": 40 },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "responseTimeMs": { "type": "number", "minimum": 0 },
+        "errorRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "requestsPerMinute": { "type": "number", "minimum": 0 }
+      }
+    },
+    "components": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "status": { "enum": ["healthy", "degraded", "unhealthy", "unknown"] }
+        }
+      }
+    }
+  }
+}

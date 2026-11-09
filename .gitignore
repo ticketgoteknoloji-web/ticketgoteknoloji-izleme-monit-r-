@@ -1,0 +1,9 @@
+build/
+build-release/
+*.user
+.qmlls.ini
+.DS_Store
+*.pem
+*.key
+.env
+.env.*
