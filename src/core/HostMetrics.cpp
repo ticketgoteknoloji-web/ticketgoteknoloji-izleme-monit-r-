@@ -5,6 +5,9 @@
 #include <sys/mount.h>
 #include <sys/sysctl.h>
 #endif
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
 
 namespace tg {
 
@@ -49,6 +52,43 @@ HostSample HostMetrics::sample()
     if (statfs("/", &disk) == 0 && disk.f_blocks > 0) {
         sample.diskValid = true;
         sample.diskPercent = (1.0 - double(disk.f_bavail) / double(disk.f_blocks)) * 100.0;
+    }
+#elif defined(Q_OS_WIN)
+    FILETIME idleTime{}, kernelTime{}, userTime{};
+    if (GetSystemTimes(&idleTime, &kernelTime, &userTime)) {
+        auto toU64 = [](const FILETIME& ft) {
+            return (quint64(ft.dwHighDateTime) << 32) | quint64(ft.dwLowDateTime);
+        };
+        const quint64 idle = toU64(idleTime);
+        const quint64 kernel = toU64(kernelTime);
+        const quint64 user = toU64(userTime);
+        if (hasPrevious_) {
+            const quint64 di = idle - idle_;
+            const quint64 dk = kernel - system_;
+            const quint64 du = user - user_;
+            const quint64 total = dk + du;
+            if (total > 0 && dk >= di) {
+                sample.cpuValid = true;
+                sample.cpuPercent = double(dk - di + du) * 100.0 / double(total);
+                if (sample.cpuPercent < 0) sample.cpuPercent = 0;
+                if (sample.cpuPercent > 100) sample.cpuPercent = 100;
+            }
+        }
+        idle_ = idle;
+        system_ = kernel;
+        user_ = user;
+        hasPrevious_ = true;
+    }
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    if (GlobalMemoryStatusEx(&memory) && memory.ullTotalPhys > 0) {
+        sample.memValid = true;
+        sample.memPercent = double(memory.ullTotalPhys - memory.ullAvailPhys) * 100.0 / double(memory.ullTotalPhys);
+    }
+    ULARGE_INTEGER freeBytes{}, totalBytes{}, totalFree{};
+    if (GetDiskFreeSpaceExW(L"C:\\", &freeBytes, &totalBytes, &totalFree) && totalBytes.QuadPart > 0) {
+        sample.diskValid = true;
+        sample.diskPercent = (1.0 - double(freeBytes.QuadPart) / double(totalBytes.QuadPart)) * 100.0;
     }
 #else
     sample.label = QStringLiteral("Bu bilgisayar — ölçüm bu platformda yok");

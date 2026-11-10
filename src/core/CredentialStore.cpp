@@ -130,7 +130,7 @@ bool KeychainCredentialStore::setSecret(const QString& account, const QString& s
     cred.TargetName = const_cast<LPWSTR>(target.c_str());
     cred.CredentialBlobSize = DWORD(blob.size());
     cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char*>(blob.constData()));
-    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+    cred.Persist = CRED_PERSIST_ENTERPRISE;
     cred.UserName = const_cast<LPWSTR>(L"ticketgo-izleme");
     if (!CredWriteW(&cred, 0)) {
         if (error) *error = QStringLiteral("Windows kimlik yöneticisi kaydı başarısız.");

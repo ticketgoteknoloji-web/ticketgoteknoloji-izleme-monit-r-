@@ -134,6 +134,9 @@ private slots:
     void permissionAndRollbackAndRestart();
     void userDataStaysUntouched();
     void pathTraversalIsRejected();
+    void windowsPackagesAreNotOfferedToMac();
+    void windowsClientSelectsWindowsSetup();
+    void windowsHashMismatchBlocksInstall();
 private:
     bool prepare(tg::UpdateManager& manager, LocalHub& hub, QTemporaryDir& dir);
     QByteArray releaseJson(const LocalHub& hub, const QString& tag, const QString& zipName, bool includeManifest) const;
@@ -586,6 +589,81 @@ void TestUpdate::userDataStaysUntouched()
     QFile keyAfter(data + QStringLiteral("/keychain-not-used.txt"));
     QVERIFY(keyAfter.open(QIODevice::ReadOnly));
     QCOMPARE(keyAfter.readAll(), QByteArray("do-not-delete"));
+}
+
+void TestUpdate::windowsPackagesAreNotOfferedToMac()
+{
+    QCOMPARE(tg::assetNameForPlatformArch(QStringLiteral("windows"), QStringLiteral("x64")), QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"));
+    QCOMPARE(tg::assetNameForPlatformArch(QStringLiteral("macos"), QStringLiteral("arm64")), QStringLiteral("TicketGoIzleme-macOS-arm64.zip"));
+    QCOMPARE(tg::inferAssetPlatform(QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"), QString()), QStringLiteral("windows"));
+    QCOMPARE(tg::inferAssetPlatform(QStringLiteral("TicketGoIzleme-macOS-arm64.zip"), QString()), QStringLiteral("macos"));
+    QCOMPARE(tg::inferAssetPlatform(QStringLiteral("legacy.zip"), QStringLiteral("macos")), QStringLiteral("macos"));
+
+    tg::ReleaseInfo release;
+    release.tag = QStringLiteral("v1.9.0");
+    tg::ReleaseAsset windows;
+    windows.name = QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe");
+    windows.url = QUrl(QStringLiteral("https://github.com/ticketgoteknoloji-web/ticketgoteknoloji-izleme-monit-r-/releases/download/v1.9.0/TicketGoIzleme-Windows-x64-Setup.exe"));
+    windows.platform = QStringLiteral("windows");
+    tg::ReleaseAsset manifest;
+    manifest.name = QStringLiteral("TicketGoIzleme-update-manifest.json");
+    manifest.url = QUrl(QStringLiteral("https://github.com/ticketgoteknoloji-web/ticketgoteknoloji-izleme-monit-r-/releases/download/v1.9.0/TicketGoIzleme-update-manifest.json"));
+    release.assets = {windows, manifest};
+    const QByteArray body = QByteArrayLiteral("{\"version\":\"1.9.0\",\"channel\":\"stable\",\"assets\":[{\"name\":\"TicketGoIzleme-Windows-x64-Setup.exe\",\"platform\":\"windows\",\"arch\":\"x64\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bundleId\":\"tr.ticketgoteknoloji.izleme\",\"size\":4}]}");
+    const tg::AssetChoice macChoice = tg::selectReleasePackage(release, QStringLiteral("macos"), QStringLiteral("arm64"), body);
+    QVERIFY(!macChoice.ok);
+    QCOMPARE(macChoice.message, tg::msgWrongPlatform());
+}
+
+void TestUpdate::windowsClientSelectsWindowsSetup()
+{
+    tg::ReleaseInfo release;
+    release.tag = QStringLiteral("v1.9.0");
+    tg::ReleaseAsset mac;
+    mac.name = QStringLiteral("TicketGoIzleme-macOS-arm64.zip");
+    mac.url = QUrl(QStringLiteral("https://github.com/ticketgoteknoloji-web/ticketgoteknoloji-izleme-monit-r-/releases/download/v1.9.0/TicketGoIzleme-macOS-arm64.zip"));
+    tg::ReleaseAsset windows;
+    windows.name = QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe");
+    windows.url = QUrl(QStringLiteral("https://github.com/ticketgoteknoloji-web/ticketgoteknoloji-izleme-monit-r-/releases/download/v1.9.0/TicketGoIzleme-Windows-x64-Setup.exe"));
+    windows.platform = QStringLiteral("windows");
+    tg::ReleaseAsset manifest;
+    manifest.name = QStringLiteral("TicketGoIzleme-update-manifest.json");
+    manifest.url = QUrl(QStringLiteral("https://github.com/ticketgoteknoloji-web/ticketgoteknoloji-izleme-monit-r-/releases/download/v1.9.0/TicketGoIzleme-update-manifest.json"));
+    release.assets = {mac, windows, manifest};
+    const QByteArray body = QByteArrayLiteral("{\"version\":\"1.9.0\",\"channel\":\"stable\",\"assets\":[{\"name\":\"TicketGoIzleme-macOS-arm64.zip\",\"arch\":\"arm64\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"bundleId\":\"tr.ticketgoteknoloji.izleme\",\"size\":4},{\"name\":\"TicketGoIzleme-Windows-x64-Setup.exe\",\"platform\":\"windows\",\"arch\":\"x64\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bundleId\":\"tr.ticketgoteknoloji.izleme\",\"size\":8}]}");
+    const tg::AssetChoice winChoice = tg::selectReleasePackage(release, QStringLiteral("windows"), QStringLiteral("x64"), body);
+    QVERIFY(winChoice.ok);
+    QCOMPARE(winChoice.package.name, QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"));
+    QCOMPARE(winChoice.package.platform, QStringLiteral("windows"));
+    QCOMPARE(winChoice.package.sha256, QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    const tg::AssetChoice legacyMac = tg::selectMacPackage(release, QStringLiteral("arm64"), body);
+    QVERIFY(legacyMac.ok);
+    QCOMPARE(legacyMac.package.name, QStringLiteral("TicketGoIzleme-macOS-arm64.zip"));
+}
+
+void TestUpdate::windowsHashMismatchBlocksInstall()
+{
+    QTemporaryDir dir;
+    LocalHub hub;
+    tg::UpdateManager manager;
+    QVERIFY(prepare(manager, hub, dir));
+    manager.setPlatformForTesting(QStringLiteral("windows"));
+    manager.setArchForTesting(QStringLiteral("x64"));
+    const QString installed = dir.filePath(QStringLiteral("Program Files/TicketGoTeknoloji/TicketGo Izleme/TicketGoIzleme.exe"));
+    QDir().mkpath(QFileInfo(installed).absolutePath());
+    QFile exe(installed);
+    QVERIFY(exe.open(QIODevice::WriteOnly));
+    exe.write("installed");
+    exe.close();
+    manager.setExecutablePath(installed);
+    hub.files.insert(QStringLiteral("/releases/latest"), releaseJson(hub, QStringLiteral("v1.9.0"), QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"), true));
+    hub.files.insert(QStringLiteral("/manifest.json"), QByteArray("{\"version\":\"1.9.0\",\"channel\":\"stable\",\"assets\":[{\"name\":\"TicketGoIzleme-Windows-x64-Setup.exe\",\"platform\":\"windows\",\"arch\":\"x64\",\"sha256\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"bundleId\":\"tr.ticketgoteknoloji.izleme\",\"size\":4}]}"));
+    hub.files.insert(QStringLiteral("/pkg.zip"), QByteArray("exe!"));
+    manager.checkForUpdates();
+    QTRY_COMPARE_WITH_TIMEOUT(manager.phase(), QStringLiteral("UPDATE_AVAILABLE"), 4000);
+    manager.confirmDownload();
+    QTRY_COMPARE_WITH_TIMEOUT(manager.phase(), QStringLiteral("ERROR"), 8000);
+    QCOMPARE(manager.errorMessage(), tg::msgHashMismatch());
 }
 
 QTEST_MAIN(TestUpdate)

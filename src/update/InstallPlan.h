@@ -37,6 +37,7 @@ struct HelperPlan {
     QString bundleId;
     QString version;
     QString authority;
+    QString kind;
 };
 
 InstallLocation inspectLocation(const QString& executablePath);

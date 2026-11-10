@@ -1,0 +1,140 @@
+name: Windows desktop
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      QT_VERSION: "6.8.1"
+      QT_ARCH: win64_msvc2022_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: C:/Qt
+          key: qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}-v1
+
+      - name: Install Qt
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: ${{ env.QT_ARCH }}
+          modules: "qtquick3d qtwebsockets"
+          dir: C:/Qt
+          cache: false
+
+      - name: Resolve Qt prefix
+        shell: pwsh
+        run: |
+          $prefix = Get-ChildItem "C:/Qt/${{ env.QT_VERSION }}" -Directory | Select-Object -First 1
+          if (-not $prefix) { throw "Qt prefix missing" }
+          $kit = Join-Path $prefix.FullName "${{ env.QT_ARCH }}"
+          if (-not (Test-Path $kit)) { $kit = $prefix.FullName }
+          "QT_PREFIX=$kit" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "QT_PREFIX=$kit"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX/lib/cmake"
+
+      - name: Build
+        run: cmake --build build-windows --config Release --target ops_core_tests update_tests ticketgo-izleme ticketgo-update-helper
+
+      - name: Test ops_core
+        run: .\build-windows\ops_core_tests.exe
+
+      - name: Test update_core
+        run: .\build-windows\update_tests.exe
+
+      - name: Smoke probe
+        run: .\build-windows\TicketGoIzleme.exe --probe-once
+        # GUI screens and live login are not available on hosted runners.
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          $dist = "build-windows/dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item build-windows/TicketGoIzleme.exe $dist
+          if (Test-Path build-windows/ticketgo-update-helper.exe) {
+            Copy-Item build-windows/ticketgo-update-helper.exe $dist
+          }
+          & "$env:QT_PREFIX/bin/windeployqt.exe" "$dist/TicketGoIzleme.exe" --qmldir qml --release --no-translations
+          if (Test-Path build-windows/ticketgo-update-helper.exe) {
+            Copy-Item build-windows/ticketgo-update-helper.exe "$dist/ticketgo-update-helper.exe" -Force
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DBuildDir=$PWD\build-windows\dist" "/DOutputDir=$PWD\build-windows" packaging\windows\TicketGoIzleme.iss
+
+      - name: SHA256 and Windows manifest fragment
+        shell: pwsh
+        run: |
+          $setup = "build-windows/TicketGoIzleme-Windows-x64-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "installer missing" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          $size = (Get-Item $setup).Length
+          @"
+          {
+            "channel": "stable",
+            "version": "0.1.3",
+            "assets": [
+              {
+                "name": "TicketGoIzleme-Windows-x64-Setup.exe",
+                "platform": "windows",
+                "arch": "x64",
+                "sha256": "$hash",
+                "size": $size,
+                "bundleId": "tr.ticketgoteknoloji.izleme"
+              }
+            ]
+          }
+          "@ | Set-Content -Path build-windows/TicketGoIzleme-update-manifest.windows.json -Encoding utf8
+          "SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "SHA256=$hash"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TicketGoIzleme-Windows-x64
+          path: |
+            build-windows/TicketGoIzleme-Windows-x64-Setup.exe
+            build-windows/TicketGoIzleme-update-manifest.windows.json
+          if-no-files-found: error
+
+      # Release publishing is intentionally omitted. Use a controlled tag workflow later.

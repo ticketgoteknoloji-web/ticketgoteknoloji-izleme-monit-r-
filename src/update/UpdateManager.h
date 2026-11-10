@@ -70,6 +70,7 @@ public:
 
     void setReleaseUrl(const QUrl& url);
     void setArchForTesting(const QString& arch);
+    void setPlatformForTesting(const QString& platform);
     void setSignatureProbe(SignatureProbe probe);
     void setExecutablePath(const QString& path);
     void setDataDirectory(const QString& path);
@@ -130,11 +131,13 @@ private:
     QString errorMessage_;
     QString guidance_;
     QString arch_;
+    QString updatePlatform_;
     QString authorityOverride_;
     QString executablePath_;
     QString dataDirectory_;
     QString packagePath_;
     QString extractedApp_;
+    QString windowsSetupPath_;
     QString expectedSha_;
     QString expectedVersion_;
     qint64 packageBytes_ = -1;

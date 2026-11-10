@@ -39,12 +39,43 @@ QString normalizeArch(const QString& cpuArch)
     return {};
 }
 
-QString assetNameForArch(const QString& cpuArch)
+QString currentUpdatePlatform()
+{
+#if defined(Q_OS_WIN)
+    return QStringLiteral("windows");
+#elif defined(Q_OS_MACOS)
+    return QStringLiteral("macos");
+#else
+    return {};
+#endif
+}
+
+QString inferAssetPlatform(const QString& assetName, const QString& platformField)
+{
+    const QString explicitPlatform = platformField.trimmed().toLower();
+    if (explicitPlatform == QLatin1String("macos") || explicitPlatform == QLatin1String("darwin") || explicitPlatform == QLatin1String("osx")) return QStringLiteral("macos");
+    if (explicitPlatform == QLatin1String("windows") || explicitPlatform == QLatin1String("win") || explicitPlatform == QLatin1String("win32")) return QStringLiteral("windows");
+    const QString lower = assetName.toLower();
+    if (lower.contains(QStringLiteral("windows")) || lower.contains(QStringLiteral("-win-")) || lower.endsWith(QStringLiteral(".exe"))) return QStringLiteral("windows");
+    if (lower.contains(QStringLiteral("macos")) || lower.contains(QStringLiteral("darwin")) || lower.contains(QStringLiteral(".app"))) return QStringLiteral("macos");
+    return {};
+}
+
+QString assetNameForPlatformArch(const QString& platform, const QString& cpuArch)
 {
     const QString arch = normalizeArch(cpuArch);
-    if (arch == QLatin1String("arm64")) return QStringLiteral("TicketGoIzleme-macOS-arm64.zip");
-    if (arch == QLatin1String("x64")) return QStringLiteral("TicketGoIzleme-macOS-x64.zip");
+    const QString plat = platform.trimmed().toLower();
+    if (plat == QLatin1String("macos")) {
+        if (arch == QLatin1String("arm64")) return QStringLiteral("TicketGoIzleme-macOS-arm64.zip");
+        if (arch == QLatin1String("x64")) return QStringLiteral("TicketGoIzleme-macOS-x64.zip");
+    }
+    if (plat == QLatin1String("windows") && arch == QLatin1String("x64")) return QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe");
     return {};
+}
+
+QString assetNameForArch(const QString& cpuArch)
+{
+    return assetNameForPlatformArch(QStringLiteral("macos"), cpuArch);
 }
 
 bool releaseUrlTrusted(const QUrl& url)
@@ -142,30 +173,41 @@ ParsedRelease parseLatestRelease(int httpStatus, const QByteArray& body, const Q
     return parsed;
 }
 
-AssetChoice selectMacPackage(const ReleaseInfo& release, const QString& cpuArch, const QByteArray& manifestJson)
+AssetChoice selectReleasePackage(const ReleaseInfo& release, const QString& platform, const QString& cpuArch, const QByteArray& manifestJson)
 {
     AssetChoice choice;
+    const QString plat = platform.trimmed().toLower();
     const QString arch = normalizeArch(cpuArch);
-    const QString expectedName = assetNameForArch(cpuArch);
+    const QString expectedName = assetNameForPlatformArch(plat, cpuArch);
+    if (plat.isEmpty()) {
+        choice.message = msgWrongPlatform();
+        return choice;
+    }
     if (arch.isEmpty() || expectedName.isEmpty()) {
         choice.message = msgWrongArch();
         return choice;
     }
-    const ReleaseAsset* zip = nullptr;
+    const ReleaseAsset* package = nullptr;
     const ReleaseAsset* manifestAsset = nullptr;
+    bool otherPlatform = false;
+    bool otherArch = false;
     for (const ReleaseAsset& asset : release.assets) {
-        if (asset.name == expectedName) zip = &asset;
-        if (asset.name == QLatin1String("TicketGoIzleme-update-manifest.json")) manifestAsset = &asset;
-    }
-    if (!zip) {
-        bool otherArch = false;
-        for (const ReleaseAsset& asset : release.assets) {
-            if (asset.name == QLatin1String("TicketGoIzleme-macOS-arm64.zip") || asset.name == QLatin1String("TicketGoIzleme-macOS-x64.zip")) otherArch = true;
+        if (asset.name == QLatin1String("TicketGoIzleme-update-manifest.json")) {
+            manifestAsset = &asset;
+            continue;
         }
-        choice.message = otherArch ? msgWrongArch() : msgMissingAsset();
+        const QString assetPlatform = inferAssetPlatform(asset.name, asset.platform);
+        if (asset.name == expectedName) package = &asset;
+        else if (assetPlatform == plat) otherArch = true;
+        else if (!assetPlatform.isEmpty()) otherPlatform = true;
+    }
+    if (!package) {
+        if (otherArch) choice.message = msgWrongArch();
+        else if (otherPlatform) choice.message = msgWrongPlatform();
+        else choice.message = msgMissingAsset();
         return choice;
     }
-    if (sourceArchive(zip->name, zip->url)) {
+    if (sourceArchive(package->name, package->url)) {
         choice.message = msgMissingAsset();
         return choice;
     }
@@ -194,11 +236,20 @@ AssetChoice selectMacPackage(const ReleaseInfo& release, const QString& cpuArch,
     bool found = false;
     for (const QJsonValue& value : rows) {
         const QJsonObject object = value.toObject();
-        if (object.value(QStringLiteral("name")).toString() == expectedName) {
-            row = object;
-            found = true;
-            break;
+        if (object.value(QStringLiteral("name")).toString() != expectedName) continue;
+        const QString rowPlatform = inferAssetPlatform(object.value(QStringLiteral("name")).toString(), object.value(QStringLiteral("platform")).toString());
+        if (!rowPlatform.isEmpty() && rowPlatform != plat) {
+            choice.message = msgWrongPlatform();
+            return choice;
         }
+        // Eski macOS manifestlerinde platform alanı yoktur; eksik alan macos kabul edilir.
+        if (rowPlatform.isEmpty() && plat != QLatin1String("macos")) {
+            choice.message = msgWrongPlatform();
+            return choice;
+        }
+        row = object;
+        found = true;
+        break;
     }
     if (!found) {
         choice.message = msgMissingAsset();
@@ -219,13 +270,19 @@ AssetChoice selectMacPackage(const ReleaseInfo& release, const QString& cpuArch,
         return choice;
     }
     choice.ok = true;
-    choice.package = *zip;
+    choice.package = *package;
     choice.package.sha256 = sha;
     choice.package.arch = arch;
+    choice.package.platform = plat;
     choice.package.bundleId = QStringLiteral("tr.ticketgoteknoloji.izleme");
     const qint64 manifestSize = static_cast<qint64>(row.value(QStringLiteral("size")).toDouble(-1));
     if (manifestSize >= 0) choice.package.size = manifestSize;
     return choice;
+}
+
+AssetChoice selectMacPackage(const ReleaseInfo& release, const QString& cpuArch, const QByteArray& manifestJson)
+{
+    return selectReleasePackage(release, QStringLiteral("macos"), cpuArch, manifestJson);
 }
 
 } // namespace tg

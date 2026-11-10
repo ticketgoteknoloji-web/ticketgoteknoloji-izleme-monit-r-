@@ -1,5 +1,7 @@
 build/
 build-release/
+build-v013/
+build-windows/
 *.user
 .qmlls.ini
 .DS_Store

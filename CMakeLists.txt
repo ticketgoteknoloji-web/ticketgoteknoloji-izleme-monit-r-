@@ -34,11 +34,12 @@ if(APPLE)
   target_link_libraries(ops_core PUBLIC "-framework Security" "-framework CoreFoundation" "-framework AudioToolbox")
 endif()
 if(WIN32)
-  target_link_libraries(ops_core PUBLIC crypt32)
+  target_link_libraries(ops_core PUBLIC Advapi32)
 endif()
 
 qt_add_executable(ticketgo-izleme
   MACOSX_BUNDLE
+  WIN32
   src/app/main.cpp
   src/app/OpsController.cpp
 )
@@ -83,6 +84,11 @@ qt_add_qml_module(ticketgo-izleme
 set(APP_ICON_MACOS "${CMAKE_CURRENT_SOURCE_DIR}/resources/AppIcon.icns")
 set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 target_sources(ticketgo-izleme PRIVATE ${APP_ICON_MACOS})
+if(WIN32)
+  set(APP_ICON_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/AppIcon.ico")
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+  target_sources(ticketgo-izleme PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+endif()
 
 qt_add_resources(ticketgo-izleme controls_conf
   PREFIX "/"
@@ -99,6 +105,13 @@ set_target_properties(ticketgo-izleme PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION 0.1.3
   MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.3
 )
+if(WIN32)
+  set_target_properties(ticketgo-izleme PROPERTIES
+    WIN32_EXECUTABLE TRUE
+    OUTPUT_NAME "TicketGoIzleme"
+  )
+  target_compile_definitions(ticketgo-izleme PRIVATE UNICODE _UNICODE)
+endif()
 
 add_library(update_core STATIC
   src/update/SemVer.cpp
@@ -120,6 +133,12 @@ if(APPLE)
   add_custom_command(TARGET ticketgo-izleme POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ticketgo-izleme>/../Helpers"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ticketgo-update-helper>" "$<TARGET_FILE_DIR:ticketgo-izleme>/../Helpers/ticketgo-update-helper"
+  )
+  add_dependencies(ticketgo-izleme ticketgo-update-helper)
+endif()
+if(WIN32)
+  add_custom_command(TARGET ticketgo-izleme POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:ticketgo-update-helper>" "$<TARGET_FILE_DIR:ticketgo-izleme>/ticketgo-update-helper.exe"
   )
   add_dependencies(ticketgo-izleme ticketgo-update-helper)
 endif()

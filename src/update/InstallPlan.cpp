@@ -10,8 +10,13 @@
 #include <QProcess>
 #include <QThread>
 
+#if defined(Q_OS_UNIX)
 #include <signal.h>
 #include <unistd.h>
+#endif
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
 
 namespace tg {
 namespace {
@@ -23,6 +28,7 @@ bool copyTree(const QString& from, const QString& to, QString* error)
         if (error) *error = QStringLiteral("Eski kopya temizlenemedi.");
         return false;
     }
+#if defined(Q_OS_MACOS)
     QProcess process;
     process.start(QStringLiteral("/usr/bin/ditto"), {from, to});
     if (!process.waitForFinished(180000) || process.exitCode() != 0) {
@@ -30,22 +36,50 @@ bool copyTree(const QString& from, const QString& to, QString* error)
         return false;
     }
     return true;
+#else
+    Q_UNUSED(from);
+    if (error) *error = QStringLiteral("Bu platformda paket kopyalama desteklenmiyor.");
+    return false;
+#endif
 }
 
 bool sameOrInside(const QString& path, const QString& root)
 {
     if (root.isEmpty() || path.isEmpty()) return false;
-    return path == root || path.startsWith(root + QLatin1Char('/'));
+    return path == root || path.startsWith(root + QLatin1Char('/')) || path.startsWith(root + QLatin1Char('\\'));
 }
 
 bool protectedPath(const QString& path)
 {
     const QString absolute = QFileInfo(path).absoluteFilePath();
+#if defined(Q_OS_WIN)
+    if (!absolute.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive) && !absolute.endsWith(QStringLiteral(".app"), Qt::CaseInsensitive)) return true;
+#else
     if (!absolute.endsWith(QStringLiteral(".app"))) return true;
-    if (absolute.contains(QStringLiteral("/ticket-go-izleme-qt/"))) return true;
-    if (absolute.contains(QStringLiteral("/build/")) || absolute.contains(QStringLiteral("/build-release/"))) return true;
+#endif
+    if (absolute.contains(QStringLiteral("/ticket-go-izleme-qt/")) || absolute.contains(QStringLiteral("\\ticket-go-izleme-qt\\"))) return true;
+    if (absolute.contains(QStringLiteral("/build/")) || absolute.contains(QStringLiteral("\\build\\"))
+        || absolute.contains(QStringLiteral("/build-release/")) || absolute.contains(QStringLiteral("\\build-release\\"))) return true;
     if (absolute.contains(QStringLiteral(".."))) return true;
     return false;
+}
+
+bool parentStillRunning(qint64 pid)
+{
+    if (pid <= 0) return false;
+#if defined(Q_OS_WIN)
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!process) return false;
+    DWORD code = STILL_ACTIVE;
+    const BOOL ok = GetExitCodeProcess(process, &code);
+    CloseHandle(process);
+    return ok && code == STILL_ACTIVE;
+#elif defined(Q_OS_UNIX)
+    return kill(static_cast<pid_t>(pid), 0) == 0;
+#else
+    Q_UNUSED(pid);
+    return false;
+#endif
 }
 
 } // namespace
@@ -53,7 +87,11 @@ bool protectedPath(const QString& path)
 bool shellPathSafe(const QString& path)
 {
     if (path.isEmpty()) return false;
+#if defined(Q_OS_WIN)
+    const QString forbidden = QStringLiteral("\"$`!\n\r;&|<>");
+#else
     const QString forbidden = QStringLiteral("\"\\$`!\n\r;&|<>");
+#endif
     for (const QChar ch : path) {
         if (forbidden.contains(ch)) return false;
     }
@@ -64,6 +102,21 @@ InstallLocation inspectLocation(const QString& executablePath)
 {
     InstallLocation location;
     const QString absolute = QFileInfo(executablePath).absoluteFilePath();
+#if defined(Q_OS_WIN)
+    const QString lower = absolute.toLower();
+    if (!lower.endsWith(QStringLiteral("ticketgoizleme.exe"))) {
+        location.message = msgNotInstalled();
+        return location;
+    }
+    location.bundlePath = absolute;
+    if (lower.contains(QStringLiteral("ticket-go-izleme-qt")) || lower.contains(QStringLiteral("\\build\\")) || lower.contains(QStringLiteral("\\build-release\\")) || lower.contains(QStringLiteral("\\build-v"))) {
+        location.developerBuild = true;
+        location.message = msgDeveloperBuild();
+        return location;
+    }
+    location.installed = true;
+    return location;
+#else
     const bool insideBundle = absolute.contains(QStringLiteral(".app/Contents/MacOS/"));
     if (!insideBundle) {
         location.message = msgNotInstalled();
@@ -78,12 +131,18 @@ InstallLocation inspectLocation(const QString& executablePath)
     }
     location.installed = true;
     return location;
+#endif
 }
 
 ApplyResult applyUpdate(const ApplyRequest& request, const std::function<bool(const QString& appPath)>& accept)
 {
     ApplyResult result;
     result.backupApp = request.backupApp;
+#if !defined(Q_OS_MACOS)
+    Q_UNUSED(accept);
+    result.message = QStringLiteral("Bu kurulum yolu yalnızca macOS uygulama paketleri içindir.");
+    return result;
+#else
     if (!request.writable) {
         result.message = msgNoPermission();
         return result;
@@ -133,11 +192,12 @@ ApplyResult applyUpdate(const ApplyRequest& request, const std::function<bool(co
     QDir(previous).removeRecursively();
     result.ok = true;
     return result;
+#endif
 }
 
 bool writeHelperPlan(const QString& path, const HelperPlan& plan, QString* error)
 {
-    if (!shellPathSafe(plan.sourceApp) || !shellPathSafe(plan.targetApp) || !shellPathSafe(plan.backupApp)) {
+    if (!shellPathSafe(plan.sourceApp) || !shellPathSafe(plan.targetApp) || (!plan.backupApp.isEmpty() && !shellPathSafe(plan.backupApp))) {
         if (error) *error = msgPathRejected();
         return false;
     }
@@ -150,6 +210,7 @@ bool writeHelperPlan(const QString& path, const HelperPlan& plan, QString* error
     object.insert(QStringLiteral("bundleId"), plan.bundleId);
     object.insert(QStringLiteral("version"), plan.version);
     object.insert(QStringLiteral("authority"), plan.authority);
+    object.insert(QStringLiteral("kind"), plan.kind.isEmpty() ? QStringLiteral("macos-app") : plan.kind);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (error) *error = QStringLiteral("Güncelleme planı yazılamadı.");
@@ -176,6 +237,8 @@ HelperPlan readHelperPlan(const QString& path, QString* error)
     plan.bundleId = object.value(QStringLiteral("bundleId")).toString();
     plan.version = object.value(QStringLiteral("version")).toString();
     plan.authority = object.value(QStringLiteral("authority")).toString();
+    plan.kind = object.value(QStringLiteral("kind")).toString();
+    if (plan.kind.isEmpty()) plan.kind = QStringLiteral("macos-app");
     if (plan.targetApp.isEmpty() || plan.sourceApp.isEmpty()) {
         if (error) *error = QStringLiteral("Güncelleme planı eksik.");
     }
@@ -186,13 +249,26 @@ int runHelper(const QString& planPath, const SignatureProbe& probe, const std::f
 {
     QString error;
     const HelperPlan plan = readHelperPlan(planPath, &error);
-    if (!error.isEmpty() || plan.authority.trimmed().isEmpty()) return 2;
+    if (!error.isEmpty()) return 2;
     if (waitForParent && plan.parentPid > 0) {
         for (int attempt = 0; attempt < 60; ++attempt) {
-            if (kill(static_cast<pid_t>(plan.parentPid), 0) != 0) break;
+            if (!parentStillRunning(plan.parentPid)) break;
             QThread::msleep(500);
         }
     }
+    if (plan.kind == QLatin1String("windows-setup")) {
+        if (!plan.sourceApp.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive) || !QFileInfo::exists(plan.sourceApp)) return 2;
+        if (!shellPathSafe(plan.sourceApp)) return 2;
+        QStringList args;
+        args << QStringLiteral("/VERYSILENT") << QStringLiteral("/NORESTART") << QStringLiteral("/SUPPRESSMSGBOXES") << QStringLiteral("/CLOSEAPPLICATIONS");
+        if (launcher) {
+            if (!launcher(plan.sourceApp)) return 5;
+            return 0;
+        }
+        if (!QProcess::startDetached(plan.sourceApp, args)) return 4;
+        return 0;
+    }
+    if (plan.authority.trimmed().isEmpty()) return 2;
     ApplyRequest request;
     request.sourceApp = plan.sourceApp;
     request.targetApp = plan.targetApp;

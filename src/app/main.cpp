@@ -111,7 +111,11 @@ int main(int argc, char** argv)
     QCoreApplication::setOrganizationDomain(QStringLiteral("ticketgoteknoloji.com"));
     QCoreApplication::setApplicationName(QStringLiteral("SistemIzleme"));
     QCoreApplication::setApplicationVersion(QStringLiteral(TICKETGO_APP_VERSION));
+#if defined(Q_OS_WIN)
+    QApplication::setApplicationDisplayName(QStringLiteral("TicketGo İzleme ve Takip Sistemi"));
+#else
     QApplication::setApplicationDisplayName(QStringLiteral("Ticket Go İzleme"));
+#endif
     const QIcon appIcon(QStringLiteral(":/qt/qml/TicketGo/Ops/qml/assets/logo-program.png"));
     QApplication::setWindowIcon(appIcon);
     tg::Engine engine;

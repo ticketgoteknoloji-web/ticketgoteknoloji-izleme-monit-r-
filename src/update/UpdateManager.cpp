@@ -39,8 +39,9 @@ UpdateManager::UpdateManager(QObject* parent)
     , network_(new QNetworkAccessManager(this))
     , releaseUrl_(officialReleaseApi())
     , currentVersion_(QCoreApplication::applicationVersion().isEmpty() ? appVersionLiteral() : QCoreApplication::applicationVersion())
-    , platformText_(QStringLiteral("macOS ") + normalizeArch(QSysInfo::currentCpuArchitecture()))
+    , platformText_((currentUpdatePlatform() == QLatin1String("windows") ? QStringLiteral("Windows ") : QStringLiteral("macOS ")) + normalizeArch(QSysInfo::currentCpuArchitecture()))
     , arch_(QSysInfo::currentCpuArchitecture())
+    , updatePlatform_(currentUpdatePlatform())
     , executablePath_(QCoreApplication::applicationFilePath())
     , dataDirectory_(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
     , probe_(probeMacSignature)
@@ -63,6 +64,7 @@ void UpdateManager::setReleaseUrl(const QUrl& url)
 }
 
 void UpdateManager::setArchForTesting(const QString& arch) { arch_ = arch; }
+void UpdateManager::setPlatformForTesting(const QString& platform) { updatePlatform_ = platform.trimmed().toLower(); platformText_ = (updatePlatform_ == QLatin1String("windows") ? QStringLiteral("Windows ") : QStringLiteral("macOS ")) + normalizeArch(arch_); }
 void UpdateManager::setSignatureProbe(SignatureProbe probe) { probe_ = std::move(probe); }
 void UpdateManager::setExecutablePath(const QString& path) { executablePath_ = path; }
 void UpdateManager::setInstallLauncher(const std::function<bool(const QString& planPath)>& launcher) { launcher_ = launcher; }
@@ -373,22 +375,31 @@ void UpdateManager::takeRelease(int status, const QByteArray& body, const QByteA
         setPhase(QStringLiteral("UP_TO_DATE"), QStringLiteral("Program güncel"));
         return;
     }
-    const QString expectedName = assetNameForArch(arch_);
+    const QString expectedName = assetNameForPlatformArch(updatePlatform_, arch_);
     packageUrl_.clear();
     manifestUrl_.clear();
     packageBytes_ = -1;
     bool otherArch = false;
+    bool otherPlatform = false;
     for (const ReleaseAsset& asset : parsed.release.assets) {
+        if (asset.name == QLatin1String("TicketGoIzleme-update-manifest.json")) {
+            manifestUrl_ = asset.url;
+            continue;
+        }
+        const QString assetPlatform = inferAssetPlatform(asset.name, asset.platform);
         if (asset.name == expectedName) {
             packageUrl_ = asset.url;
             packageBytes_ = asset.size;
-        } else if (asset.name.startsWith(QStringLiteral("TicketGoIzleme-macOS-")) && asset.name.endsWith(QStringLiteral(".zip"))) {
+        } else if (assetPlatform == updatePlatform_) {
             otherArch = true;
+        } else if (!assetPlatform.isEmpty()) {
+            otherPlatform = true;
         }
-        if (asset.name == QLatin1String("TicketGoIzleme-update-manifest.json")) manifestUrl_ = asset.url;
     }
     if (packageUrl_.isEmpty()) {
-        fail(otherArch ? msgWrongArch() : msgMissingAsset());
+        if (otherArch) fail(msgWrongArch());
+        else if (otherPlatform) fail(msgWrongPlatform());
+        else fail(msgMissingAsset());
         return;
     }
     if (manifestUrl_.isEmpty()) {
@@ -411,15 +422,16 @@ void UpdateManager::takeManifest(const QByteArray& body)
 {
     ReleaseInfo info;
     info.tag = latestTag_;
-    ReleaseAsset zip;
-    zip.name = assetNameForArch(arch_);
-    zip.url = packageUrl_;
-    zip.size = packageBytes_;
+    ReleaseAsset package;
+    package.name = assetNameForPlatformArch(updatePlatform_, arch_);
+    package.url = packageUrl_;
+    package.size = packageBytes_;
+    package.platform = updatePlatform_;
     ReleaseAsset manifest;
     manifest.name = QStringLiteral("TicketGoIzleme-update-manifest.json");
     manifest.url = manifestUrl_;
-    info.assets = {zip, manifest};
-    const AssetChoice choice = selectMacPackage(info, arch_, body);
+    info.assets = {package, manifest};
+    const AssetChoice choice = selectReleasePackage(info, updatePlatform_, arch_, body);
     if (!choice.ok) {
         fail(choice.message);
         return;
@@ -468,6 +480,20 @@ void UpdateManager::takePackage()
         fail(msgHashMismatch());
         return;
     }
+    if (updatePlatform_ == QLatin1String("windows") && finalPath.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
+        windowsSetupPath_ = finalPath;
+        extractedApp_.clear();
+        const InstallLocation location = inspectLocation(executablePath_);
+        if (!location.installed) {
+            fail(location.message.isEmpty() ? msgNotInstalled() : location.message);
+            return;
+        }
+        errorMessage_.clear();
+        guidance_ = msgWindowsSmartScreen();
+        dialogOpen_ = true;
+        setPhase(QStringLiteral("READY_TO_INSTALL"), QStringLiteral("Kurulum hazır"));
+        return;
+    }
     const QString extractRoot = dataDirectory_ + QStringLiteral("/updates/extracted");
     QDir(extractRoot).removeRecursively();
     QDir().mkpath(extractRoot);
@@ -484,6 +510,7 @@ void UpdateManager::takePackage()
     }
     const VerifyResult verified = verifyExtractedApp(appPath, expectedSha_, actual, QStringLiteral("tr.ticketgoteknoloji.izleme"), expectedVersion_, effectiveAuthority(authorityOverride_), probe_);
     extractedApp_ = appPath;
+    windowsSetupPath_.clear();
     if (!verified.hashOk || !verified.bundleOk || !verified.versionOk) {
         fail(verified.message);
         return;
@@ -517,20 +544,22 @@ void UpdateManager::confirmInstall()
         fail(location.message.isEmpty() ? msgNotInstalled() : location.message);
         return;
     }
-    if (effectiveAuthority(authorityOverride_).isEmpty()) {
+    const bool windowsSetup = updatePlatform_ == QLatin1String("windows") && !windowsSetupPath_.isEmpty();
+    if (!windowsSetup && effectiveAuthority(authorityOverride_).isEmpty()) {
         fail(msgManualOnly(), msgManualOnly());
         return;
     }
     const QString backup = dataDirectory_ + QStringLiteral("/updates/backup/") + QFileInfo(location.bundlePath).fileName();
     HelperPlan plan;
     plan.parentPid = QCoreApplication::applicationPid();
-    plan.sourceApp = extractedApp_;
+    plan.sourceApp = windowsSetup ? windowsSetupPath_ : extractedApp_;
     plan.targetApp = location.bundlePath;
     plan.backupApp = backup;
     plan.dataDirectory = dataDirectory_;
     plan.bundleId = QStringLiteral("tr.ticketgoteknoloji.izleme");
     plan.version = expectedVersion_;
-    plan.authority = effectiveAuthority(authorityOverride_);
+    plan.authority = windowsSetup ? QStringLiteral("windows-setup-hash-verified") : effectiveAuthority(authorityOverride_);
+    plan.kind = windowsSetup ? QStringLiteral("windows-setup") : QStringLiteral("macos-app");
     QDir().mkpath(dataDirectory_ + QStringLiteral("/updates"));
     const QString planPath = dataDirectory_ + QStringLiteral("/updates/install-plan.json");
     QString error;
@@ -542,15 +571,21 @@ void UpdateManager::confirmInstall()
     bool started = false;
     if (launcher_) started = launcher_(planPath);
     else {
+#if defined(Q_OS_WIN)
+        const QString helper = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ticketgo-update-helper.exe"));
+#else
         const QString helper = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Helpers/ticketgo-update-helper"));
+#endif
         if (!QFileInfo::exists(helper) || !shellPathSafe(helper) || !shellPathSafe(planPath)) {
             fail(QStringLiteral("Güncelleme yardımcı uygulaması hazır değil. Kurulum başlatılmadı."));
             return;
         }
-        const bool writable = QFileInfo(QFileInfo(location.bundlePath).absolutePath()).isWritable();
-        if (!writable && allowAuthorization_) {
-            fail(msgNoPermission());
-            return;
+        if (!windowsSetup) {
+            const bool writable = QFileInfo(QFileInfo(location.bundlePath).absolutePath()).isWritable();
+            if (!writable && allowAuthorization_) {
+                fail(msgNoPermission());
+                return;
+            }
         }
         started = QProcess::startDetached(helper, {planPath});
     }

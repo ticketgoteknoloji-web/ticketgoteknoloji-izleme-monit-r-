@@ -13,6 +13,7 @@ struct ReleaseAsset {
     QString contentType;
     QString sha256;
     QString arch;
+    QString platform;
     QString bundleId;
 };
 
@@ -45,7 +46,11 @@ bool downloadHostTrusted(const QUrl& url);
 QString plainReleaseNotes(const QString& body);
 ParsedRelease parseLatestRelease(int httpStatus, const QByteArray& body, const QByteArray& rateRemaining);
 AssetChoice selectMacPackage(const ReleaseInfo& release, const QString& cpuArch, const QByteArray& manifestJson);
+AssetChoice selectReleasePackage(const ReleaseInfo& release, const QString& platform, const QString& cpuArch, const QByteArray& manifestJson);
 QString assetNameForArch(const QString& cpuArch);
+QString assetNameForPlatformArch(const QString& platform, const QString& cpuArch);
 QString normalizeArch(const QString& cpuArch);
+QString currentUpdatePlatform();
+QString inferAssetPlatform(const QString& assetName, const QString& platformField);
 
 } // namespace tg

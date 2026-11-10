@@ -22,7 +22,7 @@ inline QString appVersionLiteral()
 #ifdef TICKETGO_APP_VERSION
     return QString::fromUtf8(TICKETGO_APP_VERSION);
 #else
-    return QStringLiteral("0.1.2");
+    return QStringLiteral("0.1.3");
 #endif
 }
 
@@ -61,9 +61,11 @@ inline QString msgBadSignature() { return QStringLiteral("Kod imzası doğrulana
 inline QString msgBundleMismatch() { return QStringLiteral("Paket kimliği mevcut uygulamayla aynı değil."); }
 inline QString msgVersionMismatch() { return QStringLiteral("Paket sürümü yayın sürümüyle uyuşmuyor."); }
 inline QString msgManualOnly() { return QStringLiteral("Otomatik kurulum, doğrulanmış Developer ID imzası ve notarization olmadan yapılmaz. Paket çalıştırılmadı. Gatekeeper kapatılmamalı."); }
+inline QString msgWindowsSmartScreen() { return QStringLiteral("Windows paketi kod imzalı değil. SHA-256 doğrulandı. SmartScreen uyarı gösterebilir. Uygulama imzalı olarak gösterilmez."); }
 inline QString msgCancelled() { return QStringLiteral("İndirme iptal edildi."); }
-inline QString msgMissingAsset() { return QStringLiteral("Bu platform için uygun macOS paketi yok."); }
-inline QString msgWrongArch() { return QStringLiteral("Paket mimarisi bu Mac ile uyuşmuyor."); }
+inline QString msgMissingAsset() { return QStringLiteral("Bu platform için uygun paket yok."); }
+inline QString msgWrongArch() { return QStringLiteral("Paket mimarisi bu bilgisayar ile uyuşmuyor."); }
+inline QString msgWrongPlatform() { return QStringLiteral("Paket bu işletim sistemi için değil."); }
 inline QString msgBadVersion() { return QStringLiteral("Sürüm etiketi SemVer değil."); }
 inline QString msgDownloadFailed() { return QStringLiteral("Paket indirilemedi."); }
 inline QString msgPathRejected() { return QStringLiteral("Paket yolu güvenli değil."); }
