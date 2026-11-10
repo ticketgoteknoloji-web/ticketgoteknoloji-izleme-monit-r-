@@ -71,6 +71,17 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y
 
+      - name: Expose Qt runtime for tests
+        shell: pwsh
+        run: |
+          if (-not $env:QT_PREFIX) { throw "QT_PREFIX is empty" }
+          $bin = Join-Path $env:QT_PREFIX "bin"
+          if (-not (Test-Path (Join-Path $bin "Qt6Core.dll"))) { throw "Qt6Core.dll missing under $bin" }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append
+          "QT_PLUGIN_PATH=$(Join-Path $env:QT_PREFIX 'plugins')" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "QT_QPA_PLATFORM=offscreen" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Added to PATH: $bin"
+
       - name: Configure CMake
         shell: pwsh
         run: |
@@ -80,13 +91,37 @@ jobs:
         run: cmake --build build-windows --config Release --target ops_core_tests update_tests ticketgo-izleme ticketgo-update-helper
 
       - name: Test ops_core
-        run: .\build-windows\ops_core_tests.exe
+        shell: pwsh
+        run: |
+          $exe = ".\build-windows\ops_core_tests.exe"
+          if (-not (Test-Path $exe)) { throw "ops_core_tests.exe missing" }
+          & $exe -v2 -o build-windows/ops_core_tests.log,txt
+          $code = $LASTEXITCODE
+          if (Test-Path build-windows/ops_core_tests.log) { Get-Content build-windows/ops_core_tests.log }
+          Write-Host "ops_core_tests exit_code=$code"
+          if ($code -ne 0) { throw "ops_core_tests failed with exit_code=$code" }
 
       - name: Test update_core
-        run: .\build-windows\update_tests.exe
+        shell: pwsh
+        run: |
+          $exe = ".\build-windows\update_tests.exe"
+          if (-not (Test-Path $exe)) { throw "update_tests.exe missing" }
+          & $exe -v2 -o build-windows/update_tests.log,txt
+          $code = $LASTEXITCODE
+          Write-Host "===== update_tests stdout/stderr above; log file below ====="
+          if (Test-Path build-windows/update_tests.log) { Get-Content build-windows/update_tests.log }
+          Write-Host "update_tests exit_code=$code"
+          if ($code -ne 0) { throw "update_tests failed with exit_code=$code" }
 
       - name: Smoke probe
-        run: .\build-windows\TicketGoIzleme.exe --probe-once
+        shell: pwsh
+        run: |
+          $exe = ".\build-windows\TicketGoIzleme.exe"
+          if (-not (Test-Path $exe)) { throw "TicketGoIzleme.exe missing" }
+          & $exe --probe-once
+          $code = $LASTEXITCODE
+          Write-Host "smoke probe exit_code=$code"
+          if ($code -ne 0) { throw "smoke probe failed with exit_code=$code" }
         # GUI screens and live login are not available on hosted runners.
 
       - name: Deploy Qt runtime

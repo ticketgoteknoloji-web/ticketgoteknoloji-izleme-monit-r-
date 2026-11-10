@@ -8,6 +8,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -18,6 +19,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QVector>
 #include <QtTest>
 
 namespace {
@@ -25,6 +27,101 @@ namespace {
 QByteArray sha256(const QByteArray& bytes)
 {
     return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+}
+
+void appendU16(QByteArray& out, quint16 value)
+{
+    out.append(char(value & 0xff));
+    out.append(char((value >> 8) & 0xff));
+}
+
+void appendU32(QByteArray& out, quint32 value)
+{
+    out.append(char(value & 0xff));
+    out.append(char((value >> 8) & 0xff));
+    out.append(char((value >> 16) & 0xff));
+    out.append(char((value >> 24) & 0xff));
+}
+
+quint32 crc32Of(const QByteArray& data)
+{
+    static quint32 table[256];
+    static bool ready = false;
+    if (!ready) {
+        for (quint32 index = 0; index < 256; ++index) {
+            quint32 value = index;
+            for (int bit = 0; bit < 8; ++bit)
+                value = (value & 1u) ? (0xedb88320u ^ (value >> 1)) : (value >> 1);
+            table[index] = value;
+        }
+        ready = true;
+    }
+    quint32 crc = 0xffffffffu;
+    for (unsigned char byte : data)
+        crc = table[(crc ^ byte) & 0xffu] ^ (crc >> 8);
+    return crc ^ 0xffffffffu;
+}
+
+QByteArray makeStoredZip(const QVector<QPair<QString, QByteArray>>& entries)
+{
+    QByteArray locals;
+    QByteArray centrals;
+    for (const auto& entry : entries) {
+        const QByteArray name = entry.first.toUtf8();
+        const QByteArray& payload = entry.second;
+        const quint32 crc = crc32Of(payload);
+        const quint32 offset = static_cast<quint32>(locals.size());
+        locals.append("PK\x03\x04");
+        appendU16(locals, 20);
+        appendU16(locals, 0x800);
+        appendU16(locals, 0);
+        appendU16(locals, 0);
+        appendU16(locals, 0);
+        appendU32(locals, crc);
+        appendU32(locals, static_cast<quint32>(payload.size()));
+        appendU32(locals, static_cast<quint32>(payload.size()));
+        appendU16(locals, static_cast<quint16>(name.size()));
+        appendU16(locals, 0);
+        locals.append(name);
+        locals.append(payload);
+
+        centrals.append("PK\x01\x02");
+        appendU16(centrals, 20);
+        appendU16(centrals, 20);
+        appendU16(centrals, 0x800);
+        appendU16(centrals, 0);
+        appendU16(centrals, 0);
+        appendU16(centrals, 0);
+        appendU32(centrals, crc);
+        appendU32(centrals, static_cast<quint32>(payload.size()));
+        appendU32(centrals, static_cast<quint32>(payload.size()));
+        appendU16(centrals, static_cast<quint16>(name.size()));
+        appendU16(centrals, 0);
+        appendU16(centrals, 0);
+        appendU16(centrals, 0);
+        appendU16(centrals, 0);
+        appendU32(centrals, 0);
+        appendU32(centrals, offset);
+        centrals.append(name);
+    }
+    const quint32 centralOffset = static_cast<quint32>(locals.size());
+    QByteArray zip = locals + centrals;
+    zip.append("PK\x05\x06");
+    appendU16(zip, 0);
+    appendU16(zip, 0);
+    appendU16(zip, static_cast<quint16>(entries.size()));
+    appendU16(zip, static_cast<quint16>(entries.size()));
+    appendU32(zip, static_cast<quint32>(centrals.size()));
+    appendU32(zip, centralOffset);
+    appendU16(zip, 0);
+    return zip;
+}
+
+bool writeStoredZip(const QString& zipPath, const QVector<QPair<QString, QByteArray>>& entries)
+{
+    QFile file(zipPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    return file.write(makeStoredZip(entries)) >= 0;
 }
 
 QString plist(const QString& bundleId, const QString& version)
@@ -48,21 +145,18 @@ bool makeApp(const QString& root, const QString& bundleId, const QString& versio
 
 QByteArray zipApp(const QString& root)
 {
-    const QString zip = root + QStringLiteral("/package.zip");
-    QProcess process;
-    process.start(QStringLiteral("/usr/bin/python3"), {QStringLiteral("-c"), QStringLiteral(
-        "import os,sys,zipfile\n"
-        "root,dest=sys.argv[1],sys.argv[2]\n"
-        "with zipfile.ZipFile(dest,'w') as z:\n"
-        "  for base, dirs, files in os.walk(root):\n"
-        "    for name in files:\n"
-        "      full=os.path.join(base,name)\n"
-        "      z.write(full, os.path.relpath(full, root))\n"
-    ), root + QStringLiteral("/app"), zip});
-    if (!process.waitForFinished(10000) || process.exitCode() != 0) return {};
-    QFile file(zip);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    return file.readAll();
+    const QString appRoot = root + QStringLiteral("/app");
+    QVector<QPair<QString, QByteArray>> entries;
+    QDirIterator iterator(appRoot, QDir::Files, QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        iterator.next();
+        QFile file(iterator.filePath());
+        if (!file.open(QIODevice::ReadOnly)) return {};
+        const QString relative = QDir(appRoot).relativeFilePath(iterator.filePath()).replace(QLatin1Char('\\'), QLatin1Char('/'));
+        entries.append({relative, file.readAll()});
+    }
+    if (entries.isEmpty()) return {};
+    return makeStoredZip(entries);
 }
 
 class LocalHub : public QObject {
@@ -437,11 +531,18 @@ void TestUpdate::bundleMismatch()
 
 void TestUpdate::realCodesignRejectsUnsigned()
 {
+#if defined(Q_OS_MACOS)
     QTemporaryDir dir;
     QVERIFY(makeApp(dir.path(), QStringLiteral("tr.ticketgoteknoloji.izleme"), QStringLiteral("0.1.0"), QStringLiteral("x")));
     const tg::SignatureInfo info = tg::probeMacSignature(dir.filePath(QStringLiteral("Ticket Go Izleme.app")));
     QVERIFY(!info.signedOk);
     QVERIFY(!info.notarized);
+#else
+    // codesign/spctl are macOS-only; unsigned probe must not claim a valid signature.
+    const tg::SignatureInfo info = tg::probeMacSignature(QStringLiteral("C:/missing/Ticket Go Izleme.app"));
+    QVERIFY(!info.signedOk);
+    QVERIFY(!info.notarized);
+#endif
 }
 
 void TestUpdate::missingInstallAndDeveloperBuild()
@@ -463,11 +564,16 @@ void TestUpdate::missingInstallAndDeveloperBuild()
     request.writable = true;
     const tg::ApplyResult refused = tg::applyUpdate(request, [](const QString&) { return true; });
     QVERIFY(!refused.ok);
+#if defined(Q_OS_MACOS)
     QCOMPARE(refused.message, tg::msgDeveloperBuild());
+#else
+    QCOMPARE(refused.message, QStringLiteral("Bu kurulum yolu yalnızca macOS uygulama paketleri içindir."));
+#endif
 }
 
 void TestUpdate::permissionAndRollbackAndRestart()
 {
+#if defined(Q_OS_MACOS)
     QTemporaryDir dir;
     const QString data = dir.filePath(QStringLiteral("data"));
     QDir().mkpath(data);
@@ -537,30 +643,38 @@ void TestUpdate::permissionAndRollbackAndRestart()
     QVERIFY(dataFile.open(QIODevice::ReadOnly));
     QCOMPARE(dataFile.readAll(), QByteArray("user-db"));
     QVERIFY(QFile::exists(denied.backupApp + QStringLiteral("/Contents/Info.plist")));
+#else
+    // Windows installs via verified Setup.exe helper; macOS .app replacement is unavailable here.
+    tg::ApplyRequest request;
+    request.sourceApp = QStringLiteral("C:/Temp/Ticket Go Izleme.app");
+    request.targetApp = QStringLiteral("C:/Program Files/TicketGo/Ticket Go Izleme.app");
+    request.backupApp = QStringLiteral("C:/Temp/backup.app");
+    request.writable = true;
+    const tg::ApplyResult refused = tg::applyUpdate(request, [](const QString&) { return true; });
+    QVERIFY(!refused.ok);
+    QCOMPARE(refused.message, QStringLiteral("Bu kurulum yolu yalnızca macOS uygulama paketleri içindir."));
+    QVERIFY(!refused.rolledBack);
+#endif
 }
 
 void TestUpdate::pathTraversalIsRejected()
 {
     QTemporaryDir dir;
-    QProcess process;
-    process.start(QStringLiteral("/usr/bin/python3"), {QStringLiteral("-c"), QStringLiteral(
-        "import sys,zipfile\n"
-        "z=zipfile.ZipFile(sys.argv[1],'w')\n"
-        "z.writestr('../escape.txt','no')\n"
-        "z.writestr('Ticket Go Izleme.app/Contents/Info.plist','<plist></plist>')\n"
-        "z.close()\n"
-    ), dir.filePath(QStringLiteral("bad.zip"))});
-    QVERIFY(process.waitForFinished(5000));
-    QCOMPARE(process.exitCode(), 0);
-    const tg::ZipInspection inspection = tg::inspectZip(dir.filePath(QStringLiteral("bad.zip")));
+    const QString zipPath = dir.filePath(QStringLiteral("bad.zip"));
+    QVERIFY(writeStoredZip(zipPath, {
+        {QStringLiteral("../escape.txt"), QByteArray("no")},
+        {QStringLiteral("Ticket Go Izleme.app/Contents/Info.plist"), QByteArray("<plist></plist>")},
+    }));
+    const tg::ZipInspection inspection = tg::inspectZip(zipPath);
     QVERIFY(!inspection.ok);
     QString error;
-    QVERIFY(!tg::extractZip(dir.filePath(QStringLiteral("bad.zip")), dir.filePath(QStringLiteral("out")), &error));
+    QVERIFY(!tg::extractZip(zipPath, dir.filePath(QStringLiteral("out")), &error));
     QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("escape.txt"))));
 }
 
 void TestUpdate::userDataStaysUntouched()
 {
+#if defined(Q_OS_MACOS)
     QTemporaryDir dir;
     const QString data = dir.filePath(QStringLiteral("Library/Application Support/TicketGoTeknoloji/SistemIzleme"));
     QDir().mkpath(data);
@@ -591,6 +705,27 @@ void TestUpdate::userDataStaysUntouched()
     QFile keyAfter(data + QStringLiteral("/keychain-not-used.txt"));
     QVERIFY(keyAfter.open(QIODevice::ReadOnly));
     QCOMPARE(keyAfter.readAll(), QByteArray("do-not-delete"));
+#else
+    QTemporaryDir dir;
+    const QString data = dir.filePath(QStringLiteral("AppData/Roaming/TicketGoTeknoloji/SistemIzleme"));
+    QDir().mkpath(data);
+    QFile db(data + QStringLiteral("/monitor.sqlite"));
+    QVERIFY(db.open(QIODevice::WriteOnly));
+    db.write("sqlite-bytes");
+    db.close();
+    tg::ApplyRequest request;
+    request.sourceApp = QStringLiteral("C:/Temp/Ticket Go Izleme.app");
+    request.targetApp = QStringLiteral("C:/Program Files/TicketGo/Ticket Go Izleme.app");
+    request.backupApp = QStringLiteral("C:/Temp/backup.app");
+    request.dataDirectory = data;
+    request.writable = true;
+    const tg::ApplyResult result = tg::applyUpdate(request, [](const QString&) { return false; });
+    QVERIFY(!result.ok);
+    QVERIFY(!result.rolledBack);
+    QFile dbAfter(data + QStringLiteral("/monitor.sqlite"));
+    QVERIFY(dbAfter.open(QIODevice::ReadOnly));
+    QCOMPARE(dbAfter.readAll(), QByteArray("sqlite-bytes"));
+#endif
 }
 
 void TestUpdate::windowsPackagesAreNotOfferedToMac()
