@@ -101,22 +101,27 @@ bool shellPathSafe(const QString& path)
 InstallLocation inspectLocation(const QString& executablePath)
 {
     InstallLocation location;
-    const QString absolute = QFileInfo(executablePath).absoluteFilePath();
-#if defined(Q_OS_WIN)
+    const QString normalized = QDir::fromNativeSeparators(executablePath.trimmed());
+    const bool windowsAbsolute = normalized.size() >= 3
+        && normalized.at(0).isLetter()
+        && normalized.at(1) == QLatin1Char(':')
+        && normalized.at(2) == QLatin1Char('/');
+    // Keep Windows drive paths intact so cross-platform update tests do not resolve them under the macOS source tree.
+    const QString absolute = windowsAbsolute ? normalized : QFileInfo(executablePath).absoluteFilePath();
     const QString lower = absolute.toLower();
-    if (!lower.endsWith(QStringLiteral("ticketgoizleme.exe"))) {
-        location.message = msgNotInstalled();
+    // Path shape decides the install layout so Windows update flows stay testable on macOS helpers.
+    if (lower.endsWith(QStringLiteral("ticketgoizleme.exe"))) {
+        location.bundlePath = absolute;
+        if (lower.contains(QStringLiteral("ticket-go-izleme-qt")) || lower.contains(QStringLiteral("/build/")) || lower.contains(QStringLiteral("\\build\\"))
+            || lower.contains(QStringLiteral("/build-release/")) || lower.contains(QStringLiteral("\\build-release\\"))
+            || lower.contains(QStringLiteral("/build-v")) || lower.contains(QStringLiteral("\\build-v"))) {
+            location.developerBuild = true;
+            location.message = msgDeveloperBuild();
+            return location;
+        }
+        location.installed = true;
         return location;
     }
-    location.bundlePath = absolute;
-    if (lower.contains(QStringLiteral("ticket-go-izleme-qt")) || lower.contains(QStringLiteral("\\build\\")) || lower.contains(QStringLiteral("\\build-release\\")) || lower.contains(QStringLiteral("\\build-v"))) {
-        location.developerBuild = true;
-        location.message = msgDeveloperBuild();
-        return location;
-    }
-    location.installed = true;
-    return location;
-#else
     const bool insideBundle = absolute.contains(QStringLiteral(".app/Contents/MacOS/"));
     if (!insideBundle) {
         location.message = msgNotInstalled();
@@ -131,7 +136,6 @@ InstallLocation inspectLocation(const QString& executablePath)
     }
     location.installed = true;
     return location;
-#endif
 }
 
 ApplyResult applyUpdate(const ApplyRequest& request, const std::function<bool(const QString& appPath)>& accept)

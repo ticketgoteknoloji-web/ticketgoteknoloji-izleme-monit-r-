@@ -194,8 +194,15 @@ void UpdateManager::confirmDownload()
     elapsed_.start();
     const QString staging = dataDirectory_ + QStringLiteral("/updates/staging");
     QDir().mkpath(staging);
-    packagePath_ = staging + QLatin1Char('/') + QFileInfo(packageUrl_.path()).fileName();
-    if (!packagePath_.endsWith(QStringLiteral(".zip"))) packagePath_ = staging + QStringLiteral("/package.zip");
+    QString fileName = QFileInfo(packageUrl_.path()).fileName();
+    if (updatePlatform_ == QLatin1String("windows")) {
+        if (!fileName.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive))
+            fileName = assetNameForPlatformArch(QStringLiteral("windows"), arch_);
+    } else if (!fileName.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive)) {
+        fileName = QStringLiteral("package.zip");
+    }
+    if (fileName.isEmpty()) fileName = QStringLiteral("package.bin");
+    packagePath_ = staging + QLatin1Char('/') + fileName;
     QFile::remove(packagePath_);
     QFile::remove(packagePath_ + QStringLiteral(".partial"));
     setPhase(QStringLiteral("DOWNLOADING"), QStringLiteral("İndiriliyor"));

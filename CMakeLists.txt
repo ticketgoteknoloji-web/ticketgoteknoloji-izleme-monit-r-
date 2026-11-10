@@ -81,9 +81,11 @@ qt_add_qml_module(ticketgo-izleme
     schemas/monitoring-contract-1.0.schema.json
 )
 
-set(APP_ICON_MACOS "${CMAKE_CURRENT_SOURCE_DIR}/resources/AppIcon.icns")
-set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
-target_sources(ticketgo-izleme PRIVATE ${APP_ICON_MACOS})
+if(APPLE)
+  set(APP_ICON_MACOS "${CMAKE_CURRENT_SOURCE_DIR}/resources/AppIcon.icns")
+  set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+  target_sources(ticketgo-izleme PRIVATE ${APP_ICON_MACOS})
+endif()
 if(WIN32)
   set(APP_ICON_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/AppIcon.ico")
   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)

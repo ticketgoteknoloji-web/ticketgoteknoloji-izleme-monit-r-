@@ -17,8 +17,7 @@ $Windeploy = Join-Path $QtPrefix "bin\windeployqt.exe"
 if (-not (Test-Path $Windeploy)) { throw "windeployqt not found at $Windeploy" }
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-$CmakePrefix = Join-Path $QtPrefix "lib\cmake"
-cmake -S . -B $BuildDir -G "Ninja" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$CmakePrefix"
+cmake -S . -B $BuildDir -G "Ninja" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QtPrefix"
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 cmake --build $BuildDir --config Release --target ops_core_tests update_tests ticketgo-izleme ticketgo-update-helper
 if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
@@ -82,6 +81,10 @@ $Manifest = @{
 } | ConvertTo-Json -Depth 5
 $ManifestPath = Join-Path $BuildDir "TicketGoIzleme-update-manifest.windows.json"
 Set-Content -Path $ManifestPath -Value $Manifest -Encoding utf8
+$ShaPath = Join-Path $BuildDir "TicketGoIzleme-Windows-x64-Setup.exe.sha256"
+Set-Content -Path $ShaPath -Value "TicketGoIzleme-Windows-x64-Setup.exe  $Hash" -Encoding ascii
 Write-Host "INSTALLER=$Setup"
 Write-Host "SHA256=$Hash"
+Write-Host "SHA256_FILE=$ShaPath"
 Write-Host "MANIFEST=$ManifestPath"
+Write-Host "SIGNING=unsigned (set WINDOWS_CODE_SIGN_* secrets only when a certificate exists)"

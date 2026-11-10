@@ -53,10 +53,18 @@ jobs:
       - name: Resolve Qt prefix
         shell: pwsh
         run: |
-          $prefix = Get-ChildItem "C:/Qt/${{ env.QT_VERSION }}" -Directory | Select-Object -First 1
-          if (-not $prefix) { throw "Qt prefix missing" }
-          $kit = Join-Path $prefix.FullName "${{ env.QT_ARCH }}"
-          if (-not (Test-Path $kit)) { $kit = $prefix.FullName }
+          $versionRoot = "C:/Qt/${{ env.QT_VERSION }}"
+          if (-not (Test-Path $versionRoot)) { throw "Qt version root missing: $versionRoot" }
+          $candidates = @(
+            (Join-Path $versionRoot "msvc2022_64"),
+            (Join-Path $versionRoot "${{ env.QT_ARCH }}"),
+            (Join-Path "C:/Qt" "msvc2022_64")
+          )
+          $kit = $candidates | Where-Object { Test-Path (Join-Path $_ "bin/qmake.exe") } | Select-Object -First 1
+          if (-not $kit) {
+            $kit = Get-ChildItem $versionRoot -Directory | Where-Object { Test-Path (Join-Path $_.FullName "bin/qmake.exe") } | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $kit) { throw "Qt kit with qmake.exe not found under $versionRoot" }
           "QT_PREFIX=$kit" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "QT_PREFIX=$kit"
 
@@ -66,7 +74,7 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX/lib/cmake"
+          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX"
 
       - name: Build
         run: cmake --build build-windows --config Release --target ops_core_tests update_tests ticketgo-izleme ticketgo-update-helper
@@ -124,9 +132,11 @@ jobs:
               }
             ]
           }
-          "@ | Set-Content -Path build-windows/TicketGoIzleme-update-manifest.windows.json -Encoding utf8
+          "@ | Set-Content -Path build-windows/TicketGoIzleme-update-manifest.windows.json -Encoding utf8NoBOM
+          "TicketGoIzleme-Windows-x64-Setup.exe  $hash" | Set-Content -Path build-windows/TicketGoIzleme-Windows-x64-Setup.exe.sha256 -Encoding ascii
           "SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "SHA256=$hash"
+          Write-Host "NOTE: Installer is UNSIGNED (no Windows code-signing certificate in GitHub Secrets)."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -134,7 +144,9 @@ jobs:
           name: TicketGoIzleme-Windows-x64
           path: |
             build-windows/TicketGoIzleme-Windows-x64-Setup.exe
+            build-windows/TicketGoIzleme-Windows-x64-Setup.exe.sha256
             build-windows/TicketGoIzleme-update-manifest.windows.json
           if-no-files-found: error
 
-      # Release publishing is intentionally omitted. Use a controlled tag workflow later.
+      # Release publishing is intentionally omitted.
+      # Do not attach Windows assets to an existing macOS Release from this workflow.

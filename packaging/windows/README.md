@@ -29,4 +29,10 @@ Windows istemcisi yalnızca `TicketGoIzleme-Windows-x64-Setup.exe` paketini seç
 macOS istemcisi yalnızca `TicketGoIzleme-macOS-*.zip` paketlerini seçer.
 Manifestte `platform` alanı önerilir; eski macOS kayıtlarında alan yoksa macos kabul edilir.
 
-Kod imzalama sertifikası yoksa paket imzalı olarak gösterilmez; SmartScreen uyarısı görülebilir.
+Kod imzalama sertifikası yoksa paket **imzasız**dır; SmartScreen uyarısı görülebilir.
+Sertifika yalnızca GitHub Secrets üzerinden kullanılmalıdır; kaynak koda gömülmez.
+
+CI artifact adı: `TicketGoIzleme-Windows-x64`
+(`Setup.exe`, `.sha256`, `TicketGoIzleme-update-manifest.windows.json`)
+
+Mevcut macOS Release varlıkları bu workflow tarafından silinmez veya ezilmez.

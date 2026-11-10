@@ -137,6 +137,8 @@ private slots:
     void windowsPackagesAreNotOfferedToMac();
     void windowsClientSelectsWindowsSetup();
     void windowsHashMismatchBlocksInstall();
+    void windowsDownloadKeepsExeAndReachesReady();
+    void windowsHelperLaunchesSetup();
 private:
     bool prepare(tg::UpdateManager& manager, LocalHub& hub, QTemporaryDir& dir);
     QByteArray releaseJson(const LocalHub& hub, const QString& tag, const QString& zipName, bool includeManifest) const;
@@ -664,6 +666,59 @@ void TestUpdate::windowsHashMismatchBlocksInstall()
     manager.confirmDownload();
     QTRY_COMPARE_WITH_TIMEOUT(manager.phase(), QStringLiteral("ERROR"), 8000);
     QCOMPARE(manager.errorMessage(), tg::msgHashMismatch());
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("data/updates/staging/TicketGoIzleme-Windows-x64-Setup.exe"))) == false);
+}
+
+void TestUpdate::windowsDownloadKeepsExeAndReachesReady()
+{
+    QTemporaryDir dir;
+    LocalHub hub;
+    tg::UpdateManager manager;
+    QVERIFY(prepare(manager, hub, dir));
+    manager.setPlatformForTesting(QStringLiteral("windows"));
+    manager.setArchForTesting(QStringLiteral("x64"));
+    // Synthetic installed path must not contain the source-tree marker used by inspectLocation.
+    manager.setExecutablePath(QStringLiteral("C:/Users/Demo/AppData/Local/TicketGoTeknoloji/TicketGo Izleme/TicketGoIzleme.exe"));
+    const QByteArray payload = QByteArray("setup-bytes");
+    const QByteArray digest = sha256(payload);
+    hub.files.insert(QStringLiteral("/releases/latest"), releaseJson(hub, QStringLiteral("v1.9.0"), QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"), true));
+    hub.files.insert(QStringLiteral("/manifest.json"), QByteArray("{\"version\":\"1.9.0\",\"channel\":\"stable\",\"assets\":[{\"name\":\"TicketGoIzleme-Windows-x64-Setup.exe\",\"platform\":\"windows\",\"arch\":\"x64\",\"sha256\":\"") + digest + "\",\"bundleId\":\"tr.ticketgoteknoloji.izleme\",\"size\":" + QByteArray::number(payload.size()) + "}]}");
+    hub.files.insert(QStringLiteral("/pkg.zip"), payload);
+    manager.checkForUpdates();
+    QTRY_COMPARE_WITH_TIMEOUT(manager.phase(), QStringLiteral("UPDATE_AVAILABLE"), 4000);
+    manager.confirmDownload();
+    QTRY_VERIFY_WITH_TIMEOUT(manager.phase() == QLatin1String("READY_TO_INSTALL") || manager.phase() == QLatin1String("ERROR"), 8000);
+    QCOMPARE(manager.errorMessage(), QString());
+    QCOMPARE(manager.phase(), QStringLiteral("READY_TO_INSTALL"));
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("data/updates/staging/TicketGoIzleme-Windows-x64-Setup.exe"))));
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("data/updates/staging/package.zip"))));
+    QCOMPARE(manager.guidance(), tg::msgWindowsSmartScreen());
+}
+
+void TestUpdate::windowsHelperLaunchesSetup()
+{
+    QTemporaryDir dir;
+    const QString setup = dir.filePath(QStringLiteral("TicketGoIzleme-Windows-x64-Setup.exe"));
+    QFile file(setup);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("installer");
+    file.close();
+    tg::HelperPlan plan;
+    plan.parentPid = 0;
+    plan.sourceApp = setup;
+    plan.targetApp = dir.filePath(QStringLiteral("TicketGoIzleme.exe"));
+    plan.kind = QStringLiteral("windows-setup");
+    plan.authority = QStringLiteral("windows-setup-hash-verified");
+    const QString planPath = dir.filePath(QStringLiteral("plan.json"));
+    QString error;
+    QVERIFY(tg::writeHelperPlan(planPath, plan, &error));
+    QString launched;
+    const int code = tg::runHelper(planPath, {}, [&](const QString& path) {
+        launched = path;
+        return true;
+    }, false);
+    QCOMPARE(code, 0);
+    QCOMPARE(launched, setup);
 }
 
 QTEST_MAIN(TestUpdate)
