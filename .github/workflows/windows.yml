@@ -53,7 +53,7 @@ jobs:
       - name: Resolve Qt prefix
         shell: pwsh
         run: |
-          $versionRoot = "C:/Qt/${{ env.QT_VERSION }}"
+          $versionRoot = "C:/Qt/Qt/${{ env.QT_VERSION }}"
           if (-not (Test-Path $versionRoot)) { throw "Qt version root missing: $versionRoot" }
           $candidates = @(
             (Join-Path $versionRoot "msvc2022_64"),
