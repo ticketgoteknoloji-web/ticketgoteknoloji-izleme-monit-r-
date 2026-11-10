@@ -57,6 +57,11 @@ BundleMeta readBundleMeta(const QString& appPath)
 SignatureInfo probeMacSignature(const QString& appPath)
 {
     SignatureInfo info;
+#if !defined(Q_OS_MACOS)
+    Q_UNUSED(appPath);
+    info.detail = msgBadSignature();
+    return info;
+#else
     QProcess verify;
     verify.start(QStringLiteral("/usr/bin/codesign"), {QStringLiteral("--verify"), QStringLiteral("--deep"), QStringLiteral("--strict"), QStringLiteral("--verbose=2"), appPath});
     if (!verify.waitForFinished(30000) || verify.exitCode() != 0) {
@@ -84,6 +89,7 @@ SignatureInfo probeMacSignature(const QString& appPath)
     info.notarized = gate.exitCode() == 0 && (gateText.contains(QStringLiteral("accepted")) || gateText.contains(QStringLiteral("Notarized")));
     if (!info.signedOk) info.detail = msgBadSignature();
     return info;
+#endif
 }
 
 VerifyResult verifyExtractedApp(const QString& appPath, const QString& expectedSha, const QString& actualSha, const QString& expectedBundleId, const QString& expectedVersion, const QString& expectedAuthority, const SignatureProbe& probe)

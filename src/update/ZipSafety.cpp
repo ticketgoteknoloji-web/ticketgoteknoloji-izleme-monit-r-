@@ -141,7 +141,12 @@ bool extractZip(const QString& zipPath, const QString& destination, QString* err
     }
     QDir().mkpath(destination);
     QProcess process;
+#if defined(Q_OS_MACOS)
     process.start(QStringLiteral("/usr/bin/ditto"), {QStringLiteral("-x"), QStringLiteral("-k"), zipPath, destination});
+#else
+    // Production Windows updates use the Setup.exe path; this branch keeps macOS package tests runnable on Windows CI.
+    process.start(QStringLiteral("tar"), {QStringLiteral("-xf"), zipPath, QStringLiteral("-C"), destination});
+#endif
     if (!process.waitForFinished(120000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
         if (error) *error = QStringLiteral("Paket açılamadı.");
         return false;
@@ -151,20 +156,20 @@ bool extractZip(const QString& zipPath, const QString& destination, QString* err
 
 bool treeStaysInside(const QString& root, QString* error)
 {
-    const QString canonicalRoot = QFileInfo(root).absoluteFilePath();
+    const QString canonicalRoot = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
     QDirIterator iterator(root, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
     while (iterator.hasNext()) {
         iterator.next();
         const QFileInfo info = iterator.fileInfo();
         if (info.isSymLink()) {
-            const QString target = QFileInfo(info.symLinkTarget()).absoluteFilePath();
-            if (!target.startsWith(canonicalRoot + QLatin1Char('/')) && target != canonicalRoot) {
+            const QString target = QDir::cleanPath(QFileInfo(info.symLinkTarget()).absoluteFilePath());
+            if (target != canonicalRoot && !target.startsWith(canonicalRoot + QLatin1Char('/')) && !target.startsWith(canonicalRoot + QLatin1Char('\\'))) {
                 if (error) *error = msgPathRejected();
                 return false;
             }
         }
-        const QString path = info.absoluteFilePath();
-        if (!path.startsWith(canonicalRoot + QLatin1Char('/')) && path != canonicalRoot) {
+        const QString path = QDir::cleanPath(info.absoluteFilePath());
+        if (path != canonicalRoot && !path.startsWith(canonicalRoot + QLatin1Char('/')) && !path.startsWith(canonicalRoot + QLatin1Char('\\'))) {
             if (error) *error = msgPathRejected();
             return false;
         }
