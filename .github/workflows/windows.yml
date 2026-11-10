@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/Qt
-          key: qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}-v1
+          key: qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}-v2
 
       - name: Install Qt
         if: steps.cache-qt.outputs.cache-hit != 'true'
@@ -46,7 +46,7 @@ jobs:
           host: windows
           target: desktop
           arch: ${{ env.QT_ARCH }}
-          modules: "qtquick3d qtwebsockets"
+          modules: "qtquick3d qtwebsockets qtshadertools"
           dir: C:/Qt
           cache: false
 
