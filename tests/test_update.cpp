@@ -245,6 +245,8 @@ bool TestUpdate::prepare(tg::UpdateManager& manager, LocalHub& hub, QTemporaryDi
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
     manager.setDataDirectory(dir.filePath(QStringLiteral("data")));
     manager.setReleaseUrl(hub.url(QStringLiteral("/releases/latest")));
+    // Shared release-flow fixtures use macOS arm64 packages; Windows-specific tests override both fields.
+    manager.setPlatformForTesting(QStringLiteral("macos"));
     manager.setArchForTesting(QStringLiteral("arm64"));
     manager.setExecutablePath(dir.filePath(QStringLiteral("not-installed")));
     return true;
