@@ -89,7 +89,8 @@ ApplicationWindow {
     property var pages: [
         "Genel Bakış", "Modül İzleme", "Ticket-Go API", "Go-Chat API",
         "API Ekle ve Entegrasyonlar", "Anlık Uyarılar", "Log Analizi",
-        "Sistem Performansı", "Olay Geçmişi", "Raporlar", "Ayarlar"
+        "Sistem Performansı", "Olay Geçmişi", "Raporlar", "Ayarlar",
+        "API Merkezi"
     ]
 
     RowLayout {
@@ -141,25 +142,59 @@ ApplicationWindow {
                                 height: Math.max(34, navLabel.implicitHeight + 12)
                                 radius: 8
                                 color: window.pageIndex === index ? Theme.selected : (navHover.containsMouse ? Theme.hover : "transparent")
-                                Text {
-                                    id: navLabel
+                                Row {
                                     anchors.verticalCenter: parent.verticalCenter
                                     anchors.left: parent.left
-                                    anchors.leftMargin: 12
+                                    anchors.leftMargin: 10
                                     anchors.right: parent.right
                                     anchors.rightMargin: 8
-                                    text: modelData
-                                    color: window.pageIndex === index ? Theme.title : Theme.text
-                                    font.pixelSize: 13
-                                    font.weight: Font.Medium
-                                    wrapMode: Text.WordWrap
+                                    spacing: 8
+                                    Canvas {
+                                        id: apiNavIcon
+                                        width: modelData === "API Merkezi" ? 16 : 0
+                                        height: 16
+                                        visible: modelData === "API Merkezi"
+                                        onPaint: {
+                                            const ctx = getContext("2d")
+                                            ctx.clearRect(0, 0, width, height)
+                                            ctx.strokeStyle = window.pageIndex === index ? Theme.title : Theme.cyan
+                                            ctx.lineWidth = 1.4
+                                            ctx.beginPath()
+                                            ctx.moveTo(3, 8)
+                                            ctx.lineTo(13, 3)
+                                            ctx.moveTo(3, 8)
+                                            ctx.lineTo(13, 13)
+                                            ctx.stroke()
+                                            ctx.fillStyle = ctx.strokeStyle
+                                            ctx.beginPath(); ctx.arc(3, 8, 2.1, 0, Math.PI * 2); ctx.fill()
+                                            ctx.beginPath(); ctx.arc(13, 3, 2.1, 0, Math.PI * 2); ctx.fill()
+                                            ctx.beginPath(); ctx.arc(13, 13, 2.1, 0, Math.PI * 2); ctx.fill()
+                                        }
+                                        Connections {
+                                            target: window
+                                            function onPageIndexChanged() { apiNavIcon.requestPaint() }
+                                        }
+                                    }
+                                    Text {
+                                        id: navLabel
+                                        width: parent.width - (modelData === "API Merkezi" ? 24 : 0)
+                                        text: modelData
+                                        color: window.pageIndex === index ? Theme.title : Theme.text
+                                        font.pixelSize: 13
+                                        font.weight: Font.Medium
+                                        wrapMode: Text.WordWrap
+                                    }
                                 }
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData
                                 MouseArea {
                                     id: navHover
                                     anchors.fill: parent
                                     hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
                                     onClicked: window.goPage(index)
                                 }
+                                Accessible.onPressAction: window.goPage(index)
                             }
                         }
                     }
@@ -598,6 +633,7 @@ ApplicationWindow {
                 IncidentsPage { id: incidentsPage }
                 ReportsPage { id: reportsPage }
                 SettingsPage { id: settingsPage }
+                ApiCenterPage { id: apiCenterPage }
             }
             Rectangle {
                 Layout.fillWidth: true

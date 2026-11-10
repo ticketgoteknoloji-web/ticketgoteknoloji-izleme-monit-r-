@@ -113,6 +113,9 @@ struct SessionDecision {
 AuthEnvelope readAuthEnvelope(int status, const QJsonObject& json);
 SessionDecision decideAuthResult(bool transportOk, int status, const AuthEnvelope& envelope);
 bool shouldRefreshLogSession(int status, bool hasRefresh, bool alreadyTried);
+bool adoptPreviousLogSession();
+QString logSessionPhaseAfterResult(const QString& phase, int status, bool transportOk, bool refreshWillRun);
+QString emptyLogResultNote();
 void applySourceCounts(QList<LogSource>& sources, const QList<LogRecord>& records, bool hubConnected, const QString& unavailableReason = QString());
 QList<LogRecord> mergeLogRecords(const QList<LogRecord>& previous, const QList<LogRecord>& incoming, int cap, int* freshOut);
 QList<LogRecord> omitHiddenLogs(const QList<LogRecord>& rows, const QStringList& hiddenIds);

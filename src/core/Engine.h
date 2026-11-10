@@ -70,6 +70,7 @@ public:
     QString validateLogSession();
     bool logTokenConfigured() const;
     void clearLogToken();
+    void discardLogSession();
     void hideHubLog(const QString& id);
     void restoreHiddenHubLogs();
     int logPage() const;
@@ -197,10 +198,14 @@ private:
     bool logStale_ = false;
     bool logFetchBusy_ = false;
     bool logRefreshUsed_ = false;
+    bool logRefreshInFlight_ = false;
     bool logSessionBusy_ = false;
     QString logSessionPhase_ = QStringLiteral("none");
     QString logSessionMessage_;
     QString logSessionVerifiedAt_;
+    QString logSessionAccount_;
+    QString logAccessToken_;
+    QString logRefreshToken_;
     QString logMfaHint_;
     QString mfaChallenge_;
     QString logLiveCursor_;
@@ -212,6 +217,11 @@ private:
     void startLogList();
     void pollSystemLogs();
     void storeLogSession(const AuthEnvelope& envelope);
+    void forgetStoredLogSecrets();
+    void dropExpiredLogSession(const QString& message);
+    bool handleLogAuthResult(const HttpResult& result);
+    bool hasRefreshToken() const;
+    QString logAccessSecret() const;
 };
 
 } // namespace tg

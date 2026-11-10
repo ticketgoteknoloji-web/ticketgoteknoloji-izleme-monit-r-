@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ticketgo_izleme VERSION 0.1.1 LANGUAGES CXX)
+project(ticketgo_izleme VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +26,7 @@ add_library(ops_core STATIC
   src/core/LogHub.cpp
   src/core/ModuleLinks.cpp
   src/core/ReportWriter.cpp
+  src/core/ApiCatalog.cpp
 )
 target_include_directories(ops_core PUBLIC src/core)
 target_link_libraries(ops_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::Sql Qt6::WebSockets)
@@ -68,6 +69,7 @@ qt_add_qml_module(ticketgo-izleme
     qml/ReportsPage.qml
     qml/SettingsPage.qml
     qml/UpdateDialog.qml
+    qml/ApiCenterPage.qml
   RESOURCES
     qml/assets/logo.jpg
     qml/assets/logo-ticketgo.png
@@ -94,8 +96,8 @@ set_target_properties(ticketgo-izleme PROPERTIES
   MACOSX_BUNDLE_BUNDLE_NAME "Ticket Go İzleme"
   MACOSX_BUNDLE_INFO_STRING "Ticketgo Teknoloji Gözlem Merkezi"
   MACOSX_BUNDLE_COPYRIGHT "Ticketgo Teknoloji Gözlem Merkezi"
-  MACOSX_BUNDLE_BUNDLE_VERSION 0.1.1
-  MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.1
+  MACOSX_BUNDLE_BUNDLE_VERSION 0.1.2
+  MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.2
 )
 
 add_library(update_core STATIC

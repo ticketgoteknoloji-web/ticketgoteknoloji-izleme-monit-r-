@@ -4,6 +4,7 @@
 #include "ReportWriter.h"
 
 #include "HealthEval.h"
+#include "ApiCatalog.h"
 #include "ModuleLinks.h"
 
 #include <QDateTime>
@@ -277,9 +278,10 @@ QVariantMap OpsController::toMap(const ModuleSnapshot& module) const
     map.insert(QStringLiteral("logo"), logoForModule(module.id, module.group));
     const HealthClass bucket = classifyStatus(module.status);
     map.insert(QStringLiteral("status"), statusKey(module.status));
-    map.insert(QStringLiteral("statusLabel"), statusLabel(module.status));
+    const QString shownLabel = moduleStatusLabel(module.id, module.status);
+    map.insert(QStringLiteral("statusLabel"), shownLabel);
     map.insert(QStringLiteral("healthClass"), healthClassKey(bucket));
-    map.insert(QStringLiteral("classLabel"), healthClassLabel(bucket));
+    map.insert(QStringLiteral("classLabel"), (module.id == QLatin1String("tg-netgsm") || module.id == QLatin1String("tg-iyzico")) && module.status == ModuleStatus::Healthy ? shownLabel : healthClassLabel(bucket));
     map.insert(QStringLiteral("problem"), isProblemClass(bucket));
     ModuleStatus toneStatus = module.status;
     if (bucket == HealthClass::Warning) toneStatus = ModuleStatus::Warning;
@@ -505,6 +507,53 @@ QString OpsController::probeNow(const QString& id) { return engine_->probeNow(id
 QString OpsController::logoFor(const QString& moduleId, const QString& group) const
 {
     return logoForModule(moduleId, group);
+}
+
+QVariantMap OpsController::apiCenter() const
+{
+    return buildApiCenter(engine_->modules(), engine_->environmentText());
+}
+
+QString OpsController::copyApiText(const QString& text)
+{
+    const QString value = text.trimmed();
+    QString message;
+    if (value.isEmpty() || value == QLatin1String("—")) message = QStringLiteral("API adresi bulunamadı");
+    else if (!apiShareableText(value)) message = QStringLiteral("Bu metin paylaşılabilir katalogda yok. Kopyalanmadı.");
+    else if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(value);
+        message = value.startsWith(QLatin1String("https://")) ? QStringLiteral("Adres kopyalandı") : QStringLiteral("Yol kopyalandı");
+    } else {
+        message = QStringLiteral("Pano kullanılamıyor.");
+    }
+    emit notice(message);
+    return message;
+}
+
+QString OpsController::refreshApi(const QString& integrationId)
+{
+    QString message;
+    if (integrationId != QLatin1String("ticket-go-backend") && integrationId != QLatin1String("go-chat-api") && integrationId != QLatin1String("ticket-go-ferry")) {
+        message = QStringLiteral("API durumu alınamadı");
+    } else {
+        message = engine_->probeNow(integrationId);
+    }
+    if (message != QLatin1String("Test gönderildi.")) emit notice(message);
+    return message;
+}
+
+QString OpsController::openApiDoc(const QString& productId)
+{
+    Q_UNUSED(productId);
+    const QString message = QStringLiteral("Dokümantasyon henüz tanımlanmadı.");
+    emit notice(message);
+    return message;
+}
+
+void OpsController::postNotice(const QString& text)
+{
+    const QString message = text.trimmed();
+    if (!message.isEmpty()) emit notice(message);
 }
 
 QString OpsController::probeModule(const QString& moduleId)
@@ -1001,7 +1050,7 @@ QString OpsController::validateLogSession() { return engine_->validateLogSession
 QString OpsController::setLogToken(const QString& token)
 {
     QString error;
-    return engine_->setLogToken(token, &error) ? QStringLiteral("Jeton anahtar zincirine yazıldı. Ekranda tutulmaz.") : error;
+    return engine_->setLogToken(token, &error) ? QStringLiteral("Oturum aktif. Jeton ekranda tutulmaz.") : error;
 }
 
 void OpsController::clearLogToken() { engine_->clearLogToken(); }

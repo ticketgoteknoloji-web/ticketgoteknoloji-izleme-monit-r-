@@ -64,6 +64,31 @@ ModuleStatus mapGuard(const QJsonObject& guard, bool* present)
     return ModuleStatus::Limited;
 }
 
+ModuleStatus mapNetgsm(const QJsonObject& guard, bool* present)
+{
+    if (guard.isEmpty()) {
+        *present = false;
+        return ModuleStatus::NotConfigured;
+    }
+    *present = true;
+    const QString status = guard.value(QStringLiteral("status")).toString();
+    const bool enabled = guard.value(QStringLiteral("enabled")).toBool(false);
+    const bool configured = guard.value(QStringLiteral("configured")).toBool(false);
+    if (status == QLatin1String("disabled") || (guard.contains(QStringLiteral("enabled")) && !enabled)) {
+        return ModuleStatus::Disabled;
+    }
+    if (!configured || status == QLatin1String("missing_credentials")) {
+        return ModuleStatus::ConfigMissing;
+    }
+    if (status == QLatin1String("ok") && enabled && configured) {
+        return ModuleStatus::Healthy;
+    }
+    if (status == QLatin1String("error") || status == QLatin1String("down")) {
+        return ModuleStatus::Critical;
+    }
+    return mapGuard(guard, present);
+}
+
 QString guardEvidence(const QString& title, const QJsonObject& guard)
 {
     return title + QStringLiteral(" durumu: ") + (guard.value(QStringLiteral("status")).toString().isEmpty() ? QStringLiteral("alan var") : guard.value(QStringLiteral("status")).toString())
@@ -312,11 +337,30 @@ QList<ModuleSnapshot> evaluateTicketGo(const HttpResult& health, const HttpResul
             modules.push_back(makeModule(id, QStringLiteral("ticket-go"), name, present ? status : ModuleStatus::NotConfigured, present ? guardEvidence(name, guard) : QStringLiteral("Ready entegrasyon alanında bu modül yok.")));
         };
         addGuard(QStringLiteral("tg-mfa"), QStringLiteral("MFA / E-posta OTP"), QStringLiteral("smtp"));
-        addGuard(QStringLiteral("tg-netgsm"), QStringLiteral("NetGSM SMS"), QStringLiteral("netgsm"));
+        {
+            bool present = false;
+            const QJsonObject guard = integrations.value(QStringLiteral("netgsm")).toObject();
+            const ModuleStatus status = mapNetgsm(guard, &present);
+            const QString evidence = !present
+                ? QStringLiteral("Ready entegrasyon alanında bu modül yok.")
+                : (status == ModuleStatus::Healthy
+                    ? QStringLiteral("NetGSM etkin ve yapılandırılmış. Backend durum sinyali: ok.")
+                    : guardEvidence(QStringLiteral("NetGSM SMS"), guard));
+            modules.push_back(makeModule(QStringLiteral("tg-netgsm"), QStringLiteral("ticket-go"), QStringLiteral("NetGSM SMS"), present ? status : ModuleStatus::NotConfigured, evidence));
+        }
         addGuard(QStringLiteral("tg-liknoss"), QStringLiteral("Liknoss"), QStringLiteral("liknoss"));
     } else {
         modules.push_back(makeModule(QStringLiteral("tg-mfa"), QStringLiteral("ticket-go"), QStringLiteral("MFA / E-posta OTP"), ModuleStatus::NotConfigured, QStringLiteral("SMTP/OTP alanı ölçülmedi.")));
-        modules.push_back(makeModule(QStringLiteral("tg-netgsm"), QStringLiteral("ticket-go"), QStringLiteral("NetGSM SMS"), ModuleStatus::NotConfigured, QStringLiteral("NetGSM alanı ölçülmedi.")));
+        ModuleStatus netgsmStatus = ModuleStatus::NotConfigured;
+        QString netgsmEvidence = QStringLiteral("NetGSM alanı ölçülmedi.");
+        if (!ready.attempted) {
+            netgsmStatus = ModuleStatus::Checking;
+            netgsmEvidence = QStringLiteral("Ready ölçümü bekleniyor.");
+        } else if (!ready.transportOk) {
+            netgsmStatus = ModuleStatus::Unknown;
+            netgsmEvidence = QStringLiteral("Ready uçuna ulaşılamadı. Bu bileşen sağlıklı sayılmadı.");
+        }
+        modules.push_back(makeModule(QStringLiteral("tg-netgsm"), QStringLiteral("ticket-go"), QStringLiteral("NetGSM SMS"), netgsmStatus, netgsmEvidence));
         modules.push_back(makeModule(QStringLiteral("tg-liknoss"), QStringLiteral("ticket-go"), QStringLiteral("Liknoss"), ModuleStatus::NotConfigured, QStringLiteral("Liknoss alanı ölçülmedi.")));
     }
 
@@ -324,11 +368,15 @@ QList<ModuleSnapshot> evaluateTicketGo(const HttpResult& health, const HttpResul
         const QJsonObject pay = readyBody.value(QStringLiteral("paymentEngine")).toObject();
         const QString payStatus = pay.value(QStringLiteral("status")).toString();
         const bool readyFlag = pay.value(QStringLiteral("ready")).toBool(false);
+        const bool iyzicoProvider = pay.value(QStringLiteral("provider")).toString() == QLatin1String("iyzico");
         ModuleStatus status = ModuleStatus::ConfigMissing;
-        if (payStatus == QLatin1String("LIVE") && readyFlag) status = ModuleStatus::Limited;
+        if (payStatus == QLatin1String("LIVE") && readyFlag && iyzicoProvider) status = ModuleStatus::Healthy;
+        else if (payStatus == QLatin1String("LIVE") && readyFlag) status = ModuleStatus::Limited;
         else if (payStatus == QLatin1String("CONFIG_INCOMPLETE") || !readyFlag) status = ModuleStatus::ConfigMissing;
-        modules.push_back(makeModule(QStringLiteral("tg-iyzico"), QStringLiteral("ticket-go"), QStringLiteral("İyzico ödeme"), status,
-            QStringLiteral("paymentEngine status=") + payStatus + QStringLiteral(". Ödeme veya BIN isteği atılmadı.")));
+        const QString evidence = status == ModuleStatus::Healthy
+            ? QStringLiteral("İyzico ödeme motoru canlı ve hazır.")
+            : QStringLiteral("paymentEngine status=") + payStatus + QStringLiteral(". Ödeme veya BIN isteği atılmadı.");
+        modules.push_back(makeModule(QStringLiteral("tg-iyzico"), QStringLiteral("ticket-go"), QStringLiteral("İyzico ödeme"), status, evidence));
     } else {
         modules.push_back(makeModule(QStringLiteral("tg-iyzico"), QStringLiteral("ticket-go"), QStringLiteral("İyzico ödeme"), ModuleStatus::NotConfigured, QStringLiteral("Ödeme hazır olma alanı yok. Ödeme isteği atılmadı.")));
     }

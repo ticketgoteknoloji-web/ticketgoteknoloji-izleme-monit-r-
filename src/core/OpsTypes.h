@@ -141,6 +141,7 @@ struct HostSample {
 
 QString statusKey(ModuleStatus status);
 QString statusLabel(ModuleStatus status);
+QString moduleStatusLabel(const QString& moduleId, ModuleStatus status);
 QString connectionLabel(ModuleStatus status);
 QString toneFor(ModuleStatus status);
 bool countsInHealthRatio(ModuleStatus status);

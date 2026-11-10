@@ -435,6 +435,25 @@ bool shouldRefreshLogSession(int status, bool hasRefresh, bool alreadyTried)
     return status == 401 && hasRefresh && !alreadyTried;
 }
 
+bool adoptPreviousLogSession()
+{
+    return false;
+}
+
+QString logSessionPhaseAfterResult(const QString& phase, int status, bool transportOk, bool refreshWillRun)
+{
+    if (phase != QLatin1String("open")) return phase;
+    if (!transportOk || status <= 0) return phase;
+    if (status == 401 && refreshWillRun) return phase;
+    if (status == 401) return QStringLiteral("none");
+    return phase;
+}
+
+QString emptyLogResultNote()
+{
+    return QStringLiteral("Kayıt bulunamadı");
+}
+
 void applySourceCounts(QList<LogSource>& sources, const QList<LogRecord>& records, bool hubConnected, const QString& unavailableReason)
 {
     for (LogSource& source : sources) {

@@ -7,6 +7,7 @@
 #include "ReportStats.h"
 #include "PathProbe.h"
 #include "ReportWriter.h"
+#include "ApiCatalog.h"
 #include "OpsTypes.h"
 #include "Store.h"
 
@@ -68,8 +69,12 @@ private slots:
     void silenceDoesNotResolveIncident();
     void pingOutputIsNotStoredAsZero();
     void authEnvelopeDoesNotKeepRejectedToken();
+    void logSessionSurvivesNonAuthErrors();
     void integrationFormRejectsBadInput();
     void loginKeychainRoundTrip();
+    void netgsmReadySignal();
+    void iyzicoPaymentEngine();
+    void apiCenterUsesMeasuredStatus();
 };
 
 void TestOps::ssrfBlocksDangerousTargets()
@@ -643,6 +648,20 @@ void TestOps::authEnvelopeDoesNotKeepRejectedToken()
     QCOMPARE(tg::logReadFailureNote(true, true, 403, QString()), QStringLiteral("İzleme hesabınızın Sistem Logları okuma yetkisi yok."));
 }
 
+void TestOps::logSessionSurvivesNonAuthErrors()
+{
+    QVERIFY(!tg::adoptPreviousLogSession());
+    QCOMPARE(tg::emptyLogResultNote(), QStringLiteral("Kayıt bulunamadı"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("open"), 403, true, false), QStringLiteral("open"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("open"), 0, false, false), QStringLiteral("open"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("open"), 500, true, false), QStringLiteral("open"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("open"), 401, true, true), QStringLiteral("open"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("open"), 401, true, false), QStringLiteral("none"));
+    QCOMPARE(tg::logSessionPhaseAfterResult(QStringLiteral("none"), 401, true, false), QStringLiteral("none"));
+    QCOMPARE(tg::logReadFailureNote(true, false, 0, QString(), QStringLiteral("timeout")), QStringLiteral("Log sunucusundan yanıt alınamadı."));
+    QCOMPARE(tg::logReadFailureNote(true, true, 403, QStringLiteral("FORBIDDEN")), QStringLiteral("İzleme hesabınızın Sistem Logları okuma yetkisi yok. Kod: FORBIDDEN"));
+}
+
 void TestOps::integrationFormRejectsBadInput()
 {
     tg::Integration valid;
@@ -734,6 +753,149 @@ void TestOps::loginKeychainRoundTrip()
     QVERIFY2(store.removeSecret(account, &error), qPrintable(error));
     QVERIFY(!tg::KeychainCredentialStore().contains(account));
 #endif
+}
+
+void TestOps::netgsmReadySignal()
+{
+    auto find = [](const QList<tg::ModuleSnapshot>& modules, const QString& id) {
+        for (const tg::ModuleSnapshot& module : modules) if (module.id == id) return module;
+        return tg::ModuleSnapshot{};
+    };
+    const QString health = QStringLiteral("{\"status\":\"ok\"}");
+    const auto ready = [&](const QString& netgsm) {
+        return QStringLiteral("{\"success\":true,\"data\":{\"status\":\"ready\",\"postgres\":\"up\",\"integrations\":{\"netgsm\":%1,\"smtp\":{\"status\":\"ok\",\"enabled\":true,\"configured\":true},\"liknoss\":{\"status\":\"ok\",\"enabled\":true,\"configured\":true}}}}").arg(netgsm);
+    };
+    const auto ok = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"ok\",\"enabled\":true,\"configured\":true}"))), {}, {}, false);
+    const tg::ModuleSnapshot netgsm = find(ok, QStringLiteral("tg-netgsm"));
+    QCOMPARE(netgsm.status, tg::ModuleStatus::Healthy);
+    QCOMPARE(netgsm.connection, QStringLiteral("Bağlı"));
+    QCOMPARE(tg::moduleStatusLabel(netgsm.id, netgsm.status), QStringLiteral("Çalışıyor"));
+    QCOMPARE(tg::toneFor(netgsm.status), QStringLiteral("green"));
+    QCOMPARE(netgsm.evidence, QStringLiteral("NetGSM etkin ve yapılandırılmış. Backend durum sinyali: ok."));
+    QCOMPARE(find(ok, QStringLiteral("tg-mfa")).status, tg::ModuleStatus::Limited);
+    QCOMPARE(find(ok, QStringLiteral("tg-liknoss")).status, tg::ModuleStatus::Limited);
+    QCOMPARE(find(ok, QStringLiteral("tg-postgres")).status, tg::ModuleStatus::Healthy);
+
+    const auto disabled = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"ok\",\"enabled\":false,\"configured\":true}"))), {}, {}, false);
+    QCOMPARE(find(disabled, QStringLiteral("tg-netgsm")).status, tg::ModuleStatus::Disabled);
+    const auto missing = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"ok\",\"enabled\":true,\"configured\":false}"))), {}, {}, false);
+    QCOMPARE(find(missing, QStringLiteral("tg-netgsm")).status, tg::ModuleStatus::ConfigMissing);
+    const auto broken = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"error\",\"enabled\":true,\"configured\":true}"))), {}, {}, false);
+    QCOMPARE(find(broken, QStringLiteral("tg-netgsm")).status, tg::ModuleStatus::Critical);
+    const auto down = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"down\",\"enabled\":true,\"configured\":true}"))), {}, {}, false);
+    QCOMPARE(find(down, QStringLiteral("tg-netgsm")).status, tg::ModuleStatus::Critical);
+
+    tg::HttpResult offline;
+    offline.attempted = true;
+    offline.transportOk = false;
+    offline.detail = QStringLiteral("timeout");
+    const auto lost = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), offline, {}, {}, false);
+    QVERIFY(find(lost, QStringLiteral("tg-netgsm")).status != tg::ModuleStatus::Healthy);
+    QCOMPARE(find(lost, QStringLiteral("tg-netgsm")).status, tg::ModuleStatus::Unknown);
+    QCOMPARE(find(lost, QStringLiteral("tg-mfa")).status, tg::ModuleStatus::NotConfigured);
+}
+
+void TestOps::iyzicoPaymentEngine()
+{
+    auto find = [](const QList<tg::ModuleSnapshot>& modules, const QString& id) {
+        for (const tg::ModuleSnapshot& module : modules) if (module.id == id) return module;
+        return tg::ModuleSnapshot{};
+    };
+    const QString health = QStringLiteral("{\"status\":\"ok\"}");
+    const auto ready = [](const QString& engine) {
+        return QStringLiteral("{\"success\":true,\"data\":{\"status\":\"ready\",\"postgres\":\"up\",\"integrations\":{\"smtp\":{\"status\":\"ok\",\"enabled\":true,\"configured\":true}},\"paymentEngine\":%1}}").arg(engine);
+    };
+    const auto live = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"LIVE\",\"ready\":true,\"provider\":\"iyzico\"}"))), {}, {}, false);
+    const tg::ModuleSnapshot iyzico = find(live, QStringLiteral("tg-iyzico"));
+    QCOMPARE(iyzico.status, tg::ModuleStatus::Healthy);
+    QCOMPARE(iyzico.connection, QStringLiteral("Bağlı"));
+    QCOMPARE(tg::moduleStatusLabel(iyzico.id, iyzico.status), QStringLiteral("Çalışıyor"));
+    QCOMPARE(tg::toneFor(iyzico.status), QStringLiteral("green"));
+    QCOMPARE(iyzico.evidence, QStringLiteral("İyzico ödeme motoru canlı ve hazır."));
+    QVERIFY(!iyzico.evidence.contains(QStringLiteral("tahsilat")));
+    QCOMPARE(find(live, QStringLiteral("tg-postgres")).status, tg::ModuleStatus::Healthy);
+    QCOMPARE(find(live, QStringLiteral("tg-mfa")).status, tg::ModuleStatus::Limited);
+
+    const auto incomplete = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"CONFIG_INCOMPLETE\",\"ready\":false,\"provider\":\"iyzico\"}"))), {}, {}, false);
+    QCOMPARE(find(incomplete, QStringLiteral("tg-iyzico")).status, tg::ModuleStatus::ConfigMissing);
+    const auto notReady = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"LIVE\",\"ready\":false,\"provider\":\"iyzico\"}"))), {}, {}, false);
+    QVERIFY(find(notReady, QStringLiteral("tg-iyzico")).status != tg::ModuleStatus::Healthy);
+    QCOMPARE(find(notReady, QStringLiteral("tg-iyzico")).status, tg::ModuleStatus::ConfigMissing);
+    const auto other = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), jsonResult(200, ready(QStringLiteral("{\"status\":\"LIVE\",\"ready\":true,\"provider\":\"other\"}"))), {}, {}, false);
+    QCOMPARE(find(other, QStringLiteral("tg-iyzico")).status, tg::ModuleStatus::Limited);
+
+    tg::HttpResult offline;
+    offline.attempted = true;
+    offline.transportOk = false;
+    offline.detail = QStringLiteral("timeout");
+    const auto lost = tg::evaluateTicketGo(jsonResult(200, health), failed(QStringLiteral("yok")), offline, {}, {}, false);
+    QVERIFY(find(lost, QStringLiteral("tg-iyzico")).status != tg::ModuleStatus::Healthy);
+}
+
+void TestOps::apiCenterUsesMeasuredStatus()
+{
+    tg::ModuleSnapshot api = tg::makeModule(QStringLiteral("tg-api"), QStringLiteral("ticket-go"), QStringLiteral("Backend API"), tg::ModuleStatus::Healthy, QStringLiteral("GET /health HTTP 200. Sürüm alanı: 2.0.0+abc."));
+    tg::ModuleSnapshot chat = tg::makeModule(QStringLiteral("gochat-api"), QStringLiteral("gochat"), QStringLiteral("Go-Chat API"), tg::ModuleStatus::Healthy, QStringLiteral("GET /api/v1/gochat/health HTTP 200, enabled=true."));
+    tg::ModuleSnapshot ferry = tg::makeModule(QStringLiteral("tg-ferry"), QStringLiteral("ticket-go"), QStringLiteral("Feribot bileti satış"), tg::ModuleStatus::NotReleased, QStringLiteral("GET /api/v1/mobile-app/config HTTP 200 · published=false. Bilet satışı ve ödeme çağrılmadı."));
+    tg::ModuleSnapshot liknoss = tg::makeModule(QStringLiteral("tg-liknoss"), QStringLiteral("ticket-go"), QStringLiteral("Liknoss"), tg::ModuleStatus::Disabled, QStringLiteral("disabled"));
+    const QVariantMap center = tg::buildApiCenter({api, chat, ferry, liknoss}, QStringLiteral("production"));
+    QCOMPARE(center.value(QStringLiteral("groupCount")).toInt(), 3);
+    QCOMPARE(center.value(QStringLiteral("activeCount")).toInt(), 2);
+    QCOMPARE(center.value(QStringLiteral("partnerText")).toString(), QStringLiteral("—"));
+    QCOMPARE(center.value(QStringLiteral("shareableCount")).toInt(), 6);
+    QCOMPARE(center.value(QStringLiteral("internalCount")).toInt(), 9);
+    const QVariantList apis = center.value(QStringLiteral("apis")).toList();
+    QCOMPARE(apis.size(), 3);
+    const QVariantMap ticket = apis.at(0).toMap();
+    const QVariantMap gochat = apis.at(1).toMap();
+    const QVariantMap sale = apis.at(2).toMap();
+    QCOMPARE(ticket.value(QStringLiteral("name")).toString(), QStringLiteral("Ticket-Go Backend API"));
+    QCOMPARE(ticket.value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Çalışıyor"));
+    QCOMPARE(ticket.value(QStringLiteral("tone")).toString(), QStringLiteral("green"));
+    QCOMPARE(ticket.value(QStringLiteral("version")).toString(), QStringLiteral("2.0.0+abc"));
+    QCOMPARE(ticket.value(QStringLiteral("baseUrl")).toString(), QStringLiteral("https://api.ticket-go.net"));
+    QCOMPARE(gochat.value(QStringLiteral("name")).toString(), QStringLiteral("Go-Chat API"));
+    QCOMPARE(gochat.value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Çalışıyor"));
+    QCOMPARE(gochat.value(QStringLiteral("version")).toString(), QStringLiteral("—"));
+    QVERIFY(!gochat.value(QStringLiteral("summary")).toString().contains(QStringLiteral("mesaj içeriği")));
+    QCOMPARE(sale.value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Ölçüm yok"));
+    QCOMPARE(sale.value(QStringLiteral("tone")).toString(), QStringLiteral("gray"));
+    QCOMPARE(sale.value(QStringLiteral("connection")).toString(), QStringLiteral("Bağlı"));
+    QCOMPARE(sale.value(QStringLiteral("configLabel")).toString(), QStringLiteral("Henüz yayınlanmadı"));
+    QCOMPARE(sale.value(QStringLiteral("liknossLabel")).toString(), QStringLiteral("Devre dışı"));
+    QCOMPARE(sale.value(QStringLiteral("capabilities")).toList().size(), 9);
+    QVERIFY(sale.value(QStringLiteral("verifiedHealthy")).toBool() == false);
+    int paths = 0;
+    for (const QVariant& api : apis) {
+        for (const QVariant& endpoint : api.toMap().value(QStringLiteral("endpoints")).toList()) {
+            const QString blob = endpoint.toMap().value(QStringLiteral("params")).toString() + endpoint.toMap().value(QStringLiteral("summary")).toString();
+            QVERIFY(!blob.contains(QStringLiteral("Bearer ")));
+            QVERIFY(!blob.contains(QStringLiteral(".env")));
+            ++paths;
+        }
+    }
+    QCOMPARE(paths, 15);
+    QVERIFY(tg::apiShareableText(QStringLiteral("https://api.ticket-go.net")));
+    QVERIFY(tg::apiShareableText(QStringLiteral("/health")));
+    QVERIFY(tg::apiShareableText(QStringLiteral("/api/v1/gochat/health")));
+    QVERIFY(tg::apiShareableText(QStringLiteral("/api/v1/mobile-app/config")));
+    QVERIFY(!tg::apiShareableText(QStringLiteral("/api/v1/auth/login")));
+    QVERIFY(!tg::apiShareableText(QStringLiteral("/health/dependencies")));
+    QVERIFY(!tg::apiShareableText(QStringLiteral("Bearer secret")));
+    QVERIFY(!tg::apiShareableText(QStringLiteral("https://evil.example/health")));
+
+    const QVariantMap empty = tg::buildApiCenter({}, QString());
+    QCOMPARE(empty.value(QStringLiteral("activeCount")).toInt(), 0);
+    for (const QVariant& api : empty.value(QStringLiteral("apis")).toList()) {
+        QCOMPARE(api.toMap().value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Ölçüm yok"));
+        QCOMPARE(api.toMap().value(QStringLiteral("lastCheck")).toString(), QStringLiteral("—"));
+    }
+    tg::ModuleSnapshot lost = tg::makeModule(QStringLiteral("tg-api"), QStringLiteral("ticket-go"), QStringLiteral("Backend API"), tg::ModuleStatus::ConnectionError, QStringLiteral("ulaşılamadı"));
+    tg::ModuleSnapshot ferryLost = tg::makeModule(QStringLiteral("tg-ferry"), QStringLiteral("ticket-go"), QStringLiteral("Feribot"), tg::ModuleStatus::ConnectionError, QStringLiteral("ulaşılamadı"));
+    const QVariantMap down = tg::buildApiCenter({lost, ferryLost}, QStringLiteral("Ölçülmedi"));
+    QCOMPARE(down.value(QStringLiteral("activeCount")).toInt(), 0);
+    QCOMPARE(down.value(QStringLiteral("apis")).toList().at(0).toMap().value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Bağlantı hatası"));
+    QCOMPARE(down.value(QStringLiteral("apis")).toList().at(2).toMap().value(QStringLiteral("statusLabel")).toString(), QStringLiteral("Bağlantı hatası"));
 }
 
 QTEST_GUILESS_MAIN(TestOps)

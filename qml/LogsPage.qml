@@ -98,7 +98,7 @@ Item {
         }
 
         Label { text: "Backend Bağlantı ve Oturum Yönetimi"; color: Theme.text; font.bold: true }
-        Label { text: Ops.logSessionPhase === "open" ? "OTURUM AÇIK" : "OTURUM YOK"; color: Ops.logSessionPhase === "open" ? Theme.green : Theme.red; font.bold: true }
+        Label { text: Ops.logSessionPhase === "open" ? "Oturum aktif" : "OTURUM YOK"; color: Ops.logSessionPhase === "open" ? Theme.green : Theme.red; font.bold: true }
         Button {
             id: sessionLink
             visible: Ops.logSessionPhase !== "open"
@@ -137,7 +137,7 @@ Item {
         RowLayout {
             visible: Ops.logSessionPhase === "open"
             Layout.fillWidth: true
-            Label { text: "Backend oturumu açık"; color: Theme.cyan }
+            Label { text: "Oturum aktif"; color: Theme.cyan }
             Label { text: "Kullanıcı: " + (Ops.logSessionAccount.length > 0 ? Ops.logSessionAccount : "doğrulandı"); color: Theme.text }
             Label { text: "Bağlantı: " + (Ops.logHubConnected ? "açık" : "yok"); color: Theme.text }
             Label { text: "Son doğrulama: " + (Ops.logSessionVerifiedAt.length > 0 ? Ops.logSessionVerifiedAt : "Veri yok"); color: Theme.text }

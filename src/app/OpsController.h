@@ -157,6 +157,11 @@ public:
     Q_INVOKABLE QString exportModuleLogs(const QString& moduleId, const QString& level, const QString& text);
     Q_INVOKABLE QString exportVisibleLogs();
     Q_INVOKABLE QString logoFor(const QString& moduleId, const QString& group) const;
+    Q_INVOKABLE QVariantMap apiCenter() const;
+    Q_INVOKABLE QString copyApiText(const QString& text);
+    Q_INVOKABLE QString refreshApi(const QString& integrationId);
+    Q_INVOKABLE QString openApiDoc(const QString& productId);
+    Q_INVOKABLE void postNotice(const QString& text);
     Q_INVOKABLE QVariantMap integrationIssues(const QVariantMap& draft) const;
     Q_INVOKABLE QString saveIntegration(const QVariantMap& draft);
     Q_INVOKABLE QString removeIntegration(const QString& id);

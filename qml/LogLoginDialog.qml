@@ -30,6 +30,7 @@ Dialog {
     readonly property bool showMfa: Ops.logSessionPhase === "mfa" && !preferLogin
 
     function begin() {
+        if (dialog.opened) return
         dialog.preferLogin = false
         userField.text = ""
         passwordField.text = ""

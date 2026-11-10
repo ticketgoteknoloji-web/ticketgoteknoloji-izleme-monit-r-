@@ -68,10 +68,7 @@ bool Engine::start(QString* error)
     }
     timer_.start();
     syncSockets();
-    if (credentials_->contains(QStringLiteral("system-logs"))) {
-        logSessionPhase_ = QStringLiteral("open");
-        logSessionVerifiedAt_ = store_.setting(QStringLiteral("log_session_verified_at"));
-    }
+    if (!adoptPreviousLogSession()) forgetStoredLogSecrets();
     emit updated();
     return true;
 }
@@ -1160,39 +1157,54 @@ bool Engine::setLogToken(const QString& token, QString* error)
         if (error) *error = QStringLiteral("Jeton çok kısa. Değer saklanmadı.");
         return false;
     }
-    const bool ok = credentials_->setSecret(QStringLiteral("system-logs"), token.trimmed(), error);
-    if (ok) refreshLogs();
-    return ok;
+    logAccessToken_ = token.trimmed();
+    logSessionPhase_ = QStringLiteral("open");
+    logRefreshUsed_ = false;
+    logSessionVerifiedAt_ = QDateTime::currentDateTime().toString(QStringLiteral("dd.MM.yyyy HH:mm"));
+    QString keychainError;
+    credentials_->setSecret(QStringLiteral("system-logs"), logAccessToken_, &keychainError);
+    refreshLogs();
+    return true;
 }
 
-bool Engine::logTokenConfigured() const { return credentials_->contains(QStringLiteral("system-logs")); }
+bool Engine::logTokenConfigured() const { return logAccessSecret().size() >= 20; }
 
 QString Engine::logSessionText() const
 {
     if (logSessionPhase_ == QLatin1String("mfa")) return QStringLiteral("Çok adımlı doğrulama bekleniyor. Kod henüz doğrulanmadı.");
-    if (!credentials_->contains(QStringLiteral("system-logs"))) return QStringLiteral("Oturum yok. İç yönetim hesabıyla oturum açın.");
-    const QString account = store_.setting(QStringLiteral("log_session_user"));
-    return QStringLiteral("Backend oturumu açık. Hesap: ") + (account.isEmpty() ? QStringLiteral("doğrulandı") : account) + QStringLiteral(". Jeton gösterilmez.");
+    if (logSessionPhase_ != QLatin1String("open") || logAccessSecret().size() < 20) return QStringLiteral("Oturum yok. İç yönetim hesabıyla oturum açın.");
+    const QString account = logSessionAccount();
+    return QStringLiteral("Oturum aktif. Hesap: ") + (account.isEmpty() ? QStringLiteral("doğrulandı") : account) + QStringLiteral(". Jeton gösterilmez.");
 }
 
 QString Engine::logSessionPhase() const { return logSessionPhase_; }
 bool Engine::logSessionBusy() const { return logSessionBusy_; }
 QString Engine::logSessionMessage() const { return logSessionMessage_; }
-QString Engine::logSessionAccount() const { return store_.setting(QStringLiteral("log_session_user")); }
+QString Engine::logSessionAccount() const
+{
+    if (!logSessionAccount_.isEmpty()) return logSessionAccount_;
+    return store_.setting(QStringLiteral("log_session_user"));
+}
 QString Engine::logSessionVerifiedAt() const { return logSessionVerifiedAt_; }
 QString Engine::logMfaHint() const { return logMfaHint_; }
 
 void Engine::storeLogSession(const AuthEnvelope& envelope)
 {
-    QString error;
-    if (envelope.accessToken.size() >= 20 && !credentials_->setSecret(QStringLiteral("system-logs"), envelope.accessToken, &error)) {
+    if (envelope.accessToken.size() < 20) {
         logSessionPhase_ = QStringLiteral("error");
-        logSessionMessage_ = QStringLiteral("Anahtar zincirine yazılamadı. Oturum bu bilgisayarda saklanmadı.");
+        logSessionMessage_ = QStringLiteral("Oturum jetonu alınamadı. Oturum açılmadı.");
         logSessionBusy_ = false;
         return;
     }
-    if (envelope.refreshToken.size() >= 10) credentials_->setSecret(QStringLiteral("system-logs-refresh"), envelope.refreshToken, &error);
-    if (!envelope.account.isEmpty()) store_.setSetting(QStringLiteral("log_session_user"), envelope.account);
+    logAccessToken_ = envelope.accessToken;
+    if (envelope.refreshToken.size() >= 10) logRefreshToken_ = envelope.refreshToken;
+    QString error;
+    credentials_->setSecret(QStringLiteral("system-logs"), logAccessToken_, &error);
+    if (logRefreshToken_.size() >= 10) credentials_->setSecret(QStringLiteral("system-logs-refresh"), logRefreshToken_, &error);
+    if (!envelope.account.isEmpty()) {
+        logSessionAccount_ = envelope.account;
+        store_.setSetting(QStringLiteral("log_session_user"), envelope.account);
+    }
     mfaChallenge_.clear();
     logMfaHint_.clear();
     logSessionPhase_ = QStringLiteral("open");
@@ -1278,9 +1290,11 @@ QString Engine::submitLogMfa(const QString& code)
         if (decision.storeSession) {
             logRefreshUsed_ = false;
             storeLogSession(envelope);
-            logSessionMessage_ = QStringLiteral("Oturum doğrulandı. Loglar isteniyor.");
-            logAccessNote_ = logSessionMessage_;
-            if (logSessionPhase_ == QLatin1String("open")) refreshLogs();
+            if (logSessionPhase_ == QLatin1String("open")) {
+                logSessionMessage_ = QStringLiteral("Oturum doğrulandı. Loglar isteniyor.");
+                logAccessNote_ = logSessionMessage_;
+                refreshLogs();
+            }
         } else {
             logSessionPhase_ = QStringLiteral("mfa");
             logSessionMessage_ = decision.phase == QLatin1String("error") ? decision.message : QStringLiteral("Çok adımlı doğrulama kabul edilmedi.");
@@ -1319,11 +1333,17 @@ QString Engine::resendLogMfa()
 
 QString Engine::refreshLogSession()
 {
+    if (logRefreshInFlight_) return QStringLiteral("Oturum yenileme sürüyor.");
     if (logRefreshUsed_) return QStringLiteral("Oturum yenileme zaten denendi. Yeniden oturum açın.");
-    bool ok = false;
-    const QString refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &ok, nullptr);
-    if (!ok || refresh.size() < 10) return QStringLiteral("Yenileme kaydı yok. Yeniden oturum açın.");
+    QString refresh = logRefreshToken_;
+    if (refresh.size() < 10) {
+        bool ok = false;
+        refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &ok, nullptr);
+        if (ok && refresh.size() >= 10) logRefreshToken_ = refresh;
+    }
+    if (refresh.size() < 10) return QStringLiteral("Yenileme kaydı yok. Yeniden oturum açın.");
     logRefreshUsed_ = true;
+    logRefreshInFlight_ = true;
     QJsonObject body;
     body.insert(QStringLiteral("refreshToken"), refresh);
     ProbeRequest request;
@@ -1333,35 +1353,43 @@ QString Engine::refreshLogSession()
     request.body = QJsonDocument(body).toJson(QJsonDocument::Compact);
     request.timeoutMs = 8000;
     client_.execute(request, [this](HttpResult result) {
+        logRefreshInFlight_ = false;
         const AuthEnvelope envelope = readAuthEnvelope(result.status, result.json);
         if (envelope.accessToken.size() >= 20) {
             storeLogSession(envelope);
-            logSessionMessage_ = QStringLiteral("Oturum yenilendi. Loglar isteniyor.");
-            logAccessNote_ = logSessionMessage_;
-            if (logSessionPhase_ == QLatin1String("open")) refreshLogs();
-        } else {
-            logSessionPhase_ = QStringLiteral("error");
-            logAccessNote_ = QStringLiteral("Oturum süresi doldu. Yeniden giriş yapın.");
-            logSessionMessage_ = logAccessNote_;
+            if (logSessionPhase_ == QLatin1String("open")) {
+                logSessionMessage_ = QStringLiteral("Oturum yenilendi. Loglar isteniyor.");
+                logAccessNote_ = logSessionMessage_;
+                refreshLogs();
+            }
+            ++revision_;
+            emit updated();
+            return;
         }
-        ++revision_;
-        emit updated();
+        dropExpiredLogSession(QStringLiteral("Oturum süresi doldu. Yeniden giriş yapın."));
     });
     return QStringLiteral("Oturum yenileme denendi.");
 }
 
 QString Engine::closeLogSession()
 {
-    bool ok = false;
-    const QString token = credentials_->secret(QStringLiteral("system-logs"), &ok, nullptr);
-    bool refreshOk = false;
-    const QString refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &refreshOk, nullptr);
+    QString token = logAccessSecret();
+    QString refresh = logRefreshToken_;
+    if (refresh.size() < 10) {
+        bool refreshOk = false;
+        refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &refreshOk, nullptr);
+    }
+    const bool hadToken = token.size() >= 20;
+    logAccessToken_.clear();
+    logRefreshToken_.clear();
+    logSessionAccount_.clear();
     QString ignored;
     credentials_->removeSecret(QStringLiteral("system-logs"), &ignored);
     credentials_->removeSecret(QStringLiteral("system-logs-refresh"), &ignored);
     mfaChallenge_.clear();
     logMfaHint_.clear();
     logRefreshUsed_ = false;
+    logRefreshInFlight_ = false;
     logSessionBusy_ = false;
     logSessionPhase_ = QStringLiteral("none");
     store_.setSetting(QStringLiteral("log_session_user"), QString());
@@ -1374,12 +1402,12 @@ QString Engine::closeLogSession()
     store_.appendAudit(QStringLiteral("log-oturumu-kapatildi"), QStringLiteral("system-logs"), QStringLiteral("Jeton degeri yazilmadi. Backend logu silinmedi."));
     ++revision_;
     emit updated();
-    if (!ok || token.trimmed().isEmpty()) {
+    if (!hadToken) {
         logSessionMessage_ = QStringLiteral("Oturum bu bilgisayardan kapatıldı.");
         return logSessionMessage_;
     }
     QJsonObject body;
-    if (refreshOk && refresh.size() >= 10) body.insert(QStringLiteral("refreshToken"), refresh);
+    if (refresh.size() >= 10) body.insert(QStringLiteral("refreshToken"), refresh);
     ProbeRequest request;
     request.url = QStringLiteral("https://api.ticket-go.net/api/v1/auth/logout");
     request.method = QStringLiteral("POST");
@@ -1403,9 +1431,8 @@ QString Engine::closeLogSession()
 
 QString Engine::validateLogSession()
 {
-    bool ok = false;
-    const QString token = credentials_->secret(QStringLiteral("system-logs"), &ok, nullptr);
-    if (!ok || token.trimmed().isEmpty()) return QStringLiteral("Oturum yok.");
+    const QString token = logAccessSecret();
+    if (token.isEmpty()) return QStringLiteral("Oturum yok.");
     ProbeRequest request;
     request.url = QStringLiteral("https://api.ticket-go.net/api/v1/auth/me");
     request.method = QStringLiteral("GET");
@@ -1413,13 +1440,16 @@ QString Engine::validateLogSession()
     request.secret = token;
     request.timeoutMs = 8000;
     client_.execute(request, [this](HttpResult result) {
+        if (handleLogAuthResult(result)) return;
         const AuthEnvelope envelope = readAuthEnvelope(result.status, result.json);
         if (!result.transportOk) logAccessNote_ = QStringLiteral("Sunucuya erişilemiyor.");
         else if (result.status == 200) {
-            if (!envelope.account.isEmpty()) store_.setSetting(QStringLiteral("log_session_user"), envelope.account);
+            if (!envelope.account.isEmpty()) {
+                logSessionAccount_ = envelope.account;
+                store_.setSetting(QStringLiteral("log_session_user"), envelope.account);
+            }
             logAccessNote_ = QStringLiteral("Oturum doğrulandı. Log okuma ayrıca logs.read ister.");
-        } else if (result.status == 401) logAccessNote_ = QStringLiteral("Oturum geçersiz veya süresi dolmuş.");
-        else if (result.status == 403) logAccessNote_ = QStringLiteral("İzleme hesabınızın Sistem Logları okuma yetkisi yok.");
+        } else if (result.status == 403) logAccessNote_ = QStringLiteral("İzleme hesabınızın Sistem Logları okuma yetkisi yok.");
         else logAccessNote_ = QStringLiteral("Oturum doğrulanamadı. HTTP ") + QString::number(result.status);
         ++revision_;
         emit updated();
@@ -1457,8 +1487,15 @@ void Engine::setLogPage(int page)
 
 void Engine::clearLogToken()
 {
+    logAccessToken_.clear();
+    logRefreshToken_.clear();
+    logSessionPhase_ = QStringLiteral("none");
+    logSessionAccount_.clear();
     QString ignored;
     credentials_->removeSecret(QStringLiteral("system-logs"), &ignored);
+    credentials_->removeSecret(QStringLiteral("system-logs-refresh"), &ignored);
+    store_.setSetting(QStringLiteral("log_session_user"), QString());
+    store_.setSetting(QStringLiteral("log_session_verified_at"), QString());
     store_.appendAudit(QStringLiteral("log-jetonu-silindi"), QStringLiteral("system-logs"), QStringLiteral("Jeton değeri yazılmadı. Backend logu silinmedi."));
     hubLogs_.clear();
     hubLogConnected_ = false;
@@ -1480,9 +1517,8 @@ void Engine::refreshLogs()
             localLogs_ = parseLocalLog(QString::fromUtf8(file.readAll()));
         }
     }
-    bool ok = false;
-    const QString token = credentials_->secret(QStringLiteral("system-logs"), &ok, nullptr);
-    if (!ok || token.trimmed().isEmpty()) {
+    const QString token = logAccessSecret();
+    if (token.isEmpty()) {
         hubLogConnected_ = false;
         hubLogs_.clear();
         logStale_ = false;
@@ -1509,9 +1545,8 @@ void Engine::refreshLogs()
 
 void Engine::startLogList()
 {
-    bool ok = false;
-    const QString token = credentials_->secret(QStringLiteral("system-logs"), &ok, nullptr);
-    if (!ok || token.trimmed().isEmpty() || logFetchBusy_) return;
+    const QString token = logAccessSecret();
+    if (token.isEmpty() || logFetchBusy_) return;
     logFetchBusy_ = true;
     ProbeRequest request;
     request.url = systemLogRequestUrl(logQuery_, false, QString()).toString(QUrl::FullyEncoded);
@@ -1528,9 +1563,8 @@ void Engine::startLogList()
 void Engine::pollSystemLogs()
 {
     if (!logLive_ || logFetchBusy_) return;
-    bool ok = false;
-    const QString token = credentials_->secret(QStringLiteral("system-logs"), &ok, nullptr);
-    if (!ok || token.trimmed().isEmpty()) return;
+    const QString token = logAccessSecret();
+    if (token.isEmpty()) return;
     logFetchBusy_ = true;
     ProbeRequest request;
     request.url = systemLogRequestUrl(logQuery_, true, logLiveCursor_).toString(QUrl::FullyEncoded);
@@ -1546,17 +1580,7 @@ void Engine::pollSystemLogs()
 
 void Engine::ingestHubLogs(const HttpResult& result)
 {
-    const QString errorCode = result.json.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
-    bool refreshReady = false;
-    if (result.status == 401) {
-        bool ok = false;
-        const QString refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &ok, nullptr);
-        refreshReady = shouldRefreshLogSession(result.status, ok && refresh.size() >= 10, logRefreshUsed_);
-    }
-    if (refreshReady) {
-        refreshLogSession();
-        return;
-    }
+    if (handleLogAuthResult(result)) return;
     if (!result.transportOk || result.status < 200 || result.status >= 300 || !result.jsonOk) {
         noteLogFailure(result);
         return;
@@ -1579,7 +1603,7 @@ void Engine::ingestHubLogs(const HttpResult& result)
     logBackoffMs_ = 0;
     hubDenyNote_.clear();
     logAccessNote_ = incoming.isEmpty()
-        ? QStringLiteral("Seçilen filtrelerde log bulunamadı.")
+        ? emptyLogResultNote()
         : QStringLiteral("System Logs Hub bağlı. Bu sayfa ") + QString::number(hubLogs_.size()) + QStringLiteral(" kayıt. Kaynak toplamı ") + QString::number(logHubTotal_) + QStringLiteral(". Mesaj içeriği maskelenir.");
     ++revision_;
     emit updated();
@@ -1605,20 +1629,9 @@ void Engine::noteLogFailure(const HttpResult& result)
 
 void Engine::ingestLiveLogs(const HttpResult& result)
 {
-    const QString errorCode = result.json.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
-    bool refreshReady = false;
-    if (result.status == 401) {
-        bool ok = false;
-        const QString refresh = credentials_->secret(QStringLiteral("system-logs-refresh"), &ok, nullptr);
-        refreshReady = shouldRefreshLogSession(result.status, ok && refresh.size() >= 10, logRefreshUsed_);
-    }
-    if (refreshReady) {
-        refreshLogSession();
-        return;
-    }
+    if (handleLogAuthResult(result)) return;
     if (!result.transportOk || result.status < 200 || result.status >= 300 || !result.jsonOk) {
         noteLogFailure(result);
-        Q_UNUSED(errorCode);
         return;
     }
     const QJsonObject body = unwrapPayload(result.json);
@@ -1645,6 +1658,92 @@ void Engine::ingestLiveLogs(const HttpResult& result)
         return;
     }
     startLogList();
+}
+
+QString Engine::logAccessSecret() const
+{
+    if (logAccessToken_.size() >= 20) return logAccessToken_;
+    return {};
+}
+
+bool Engine::hasRefreshToken() const
+{
+    if (logRefreshToken_.size() >= 10) return true;
+    bool ok = false;
+    const QString stored = credentials_->secret(QStringLiteral("system-logs-refresh"), &ok, nullptr);
+    return ok && stored.size() >= 10;
+}
+
+void Engine::forgetStoredLogSecrets()
+{
+    QString ignored;
+    credentials_->removeSecret(QStringLiteral("system-logs"), &ignored);
+    credentials_->removeSecret(QStringLiteral("system-logs-refresh"), &ignored);
+    store_.setSetting(QStringLiteral("log_session_user"), QString());
+    store_.setSetting(QStringLiteral("log_session_verified_at"), QString());
+    logSessionVerifiedAt_.clear();
+    logSessionAccount_.clear();
+    logAccessToken_.clear();
+    logRefreshToken_.clear();
+    logSessionPhase_ = QStringLiteral("none");
+}
+
+void Engine::discardLogSession()
+{
+    forgetStoredLogSecrets();
+    mfaChallenge_.clear();
+    logMfaHint_.clear();
+    logRefreshUsed_ = false;
+    logRefreshInFlight_ = false;
+    logSessionBusy_ = false;
+    logSessionMessage_.clear();
+    hubLogs_.clear();
+    hubLogConnected_ = false;
+    store_.appendAudit(QStringLiteral("log-oturumu-kapatildi"), QStringLiteral("system-logs"), QStringLiteral("Uygulama kapandi. Jeton degeri yazilmadi."));
+}
+
+void Engine::dropExpiredLogSession(const QString& message)
+{
+    if (logSessionPhase_ == QLatin1String("none") && logAccessToken_.isEmpty()) return;
+    logAccessToken_.clear();
+    logRefreshToken_.clear();
+    logSessionAccount_.clear();
+    QString ignored;
+    credentials_->removeSecret(QStringLiteral("system-logs"), &ignored);
+    credentials_->removeSecret(QStringLiteral("system-logs-refresh"), &ignored);
+    logRefreshInFlight_ = false;
+    logSessionBusy_ = false;
+    logSessionPhase_ = QStringLiteral("none");
+    logSessionMessage_ = message;
+    logAccessNote_ = message;
+    hubDenyNote_ = message;
+    hubLogConnected_ = false;
+    hubLogs_.clear();
+    logHubTotal_ = -1;
+    store_.setSetting(QStringLiteral("log_session_user"), QString());
+    store_.setSetting(QStringLiteral("log_session_verified_at"), QString());
+    logSessionVerifiedAt_.clear();
+    store_.appendAudit(QStringLiteral("log-oturumu-reddedildi"), QStringLiteral("system-logs"), QStringLiteral("Jeton degeri yazilmadi."));
+    ++revision_;
+    emit updated();
+}
+
+bool Engine::handleLogAuthResult(const HttpResult& result)
+{
+    if (result.status != 401) return false;
+    if (logSessionPhase_ != QLatin1String("open")) return true;
+    if (logRefreshInFlight_) return true;
+    const bool refreshWillRun = shouldRefreshLogSession(result.status, hasRefreshToken(), logRefreshUsed_);
+    const QString next = logSessionPhaseAfterResult(logSessionPhase_, result.status, result.transportOk, refreshWillRun);
+    if (refreshWillRun && next == QLatin1String("open")) {
+        refreshLogSession();
+        return true;
+    }
+    if (next == QLatin1String("none")) {
+        dropExpiredLogSession(QStringLiteral("Oturum süresi doldu. Yeniden giriş yapın."));
+        return true;
+    }
+    return false;
 }
 
 } // namespace tg

@@ -120,6 +120,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "%s\n", qPrintable(error));
         return 2;
     }
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, [&engine]() { engine.discardLogSession(); });
     tg::OpsController controller(&engine);
     tg::UpdateManager updates;
     updates.setAllowSystemAuthorization(true);

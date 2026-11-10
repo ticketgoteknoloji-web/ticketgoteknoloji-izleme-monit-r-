@@ -134,6 +134,12 @@ QString statusLabel(ModuleStatus status)
     return QStringLiteral("Bilinmiyor");
 }
 
+QString moduleStatusLabel(const QString& moduleId, ModuleStatus status)
+{
+    if ((moduleId == QLatin1String("tg-netgsm") || moduleId == QLatin1String("tg-iyzico")) && status == ModuleStatus::Healthy) return QStringLiteral("Çalışıyor");
+    return statusLabel(status);
+}
+
 QString connectionLabel(ModuleStatus status)
 {
     switch (status) {

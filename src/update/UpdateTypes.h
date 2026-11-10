@@ -22,7 +22,7 @@ inline QString appVersionLiteral()
 #ifdef TICKETGO_APP_VERSION
     return QString::fromUtf8(TICKETGO_APP_VERSION);
 #else
-    return QStringLiteral("0.1.1");
+    return QStringLiteral("0.1.2");
 #endif
 }
 
