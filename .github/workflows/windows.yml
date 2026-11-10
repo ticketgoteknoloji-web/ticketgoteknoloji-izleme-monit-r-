@@ -95,7 +95,8 @@ jobs:
         run: |
           $exe = ".\build-windows\ops_core_tests.exe"
           if (-not (Test-Path $exe)) { throw "ops_core_tests.exe missing" }
-          & $exe -v2 -o build-windows/ops_core_tests.log,txt
+          # Quote -o value: PowerShell treats unquoted commas as array separators.
+          & $exe -v2 "-o" "build-windows/ops_core_tests.log,txt"
           $code = $LASTEXITCODE
           if (Test-Path build-windows/ops_core_tests.log) { Get-Content build-windows/ops_core_tests.log }
           Write-Host "ops_core_tests exit_code=$code"
@@ -108,7 +109,7 @@ jobs:
           if (-not (Test-Path $exe)) { throw "update_tests.exe missing" }
           Write-Host "QT_PREFIX=$env:QT_PREFIX"
           Get-ChildItem (Join-Path $env:QT_PREFIX "bin\Qt6*.dll") | Select-Object -First 20 | ForEach-Object { $_.Name }
-          & $exe -v2 -o build-windows/update_tests.log,txt *> build-windows/update_tests.console.txt
+          & $exe -v2 "-o" "build-windows/update_tests.log,txt" *> build-windows/update_tests.console.txt
           $code = $LASTEXITCODE
           Write-Host "===== update_tests console ====="
           if (Test-Path build-windows/update_tests.console.txt) { Get-Content build-windows/update_tests.console.txt }
